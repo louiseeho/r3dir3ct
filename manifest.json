@@ -5,12 +5,22 @@
   "description": "r3dir3ct blocks distracting websites and redirects you to a random problem instead.",
   "permissions": ["declarativeNetRequest", "storage", "tabs", "alarms"],
   "host_permissions": ["<all_urls>"],
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "r3dir3ct"
+    "default_title": "r3dir3ct",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
   }
 }

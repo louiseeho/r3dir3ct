@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>r3dir3ct</title>
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -75,6 +76,19 @@
       }
       .dot.green {
         background: #28c840;
+      }
+
+      .titlebar-brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .app-logo {
+        width: 22px;
+        height: 22px;
+        display: block;
+        flex-shrink: 0;
       }
 
       .title {
@@ -297,7 +311,10 @@
           <span class="dot yellow"></span>
           <span class="dot green"></span>
         </div>
-        <span class="title">r3dir3ct</span>
+        <div class="titlebar-brand">
+          <img class="app-logo" src="icon.svg" alt="" width="22" height="22" />
+          <span class="title">r3dir3ct</span>
+        </div>
       </div>
 
       <div class="content">
