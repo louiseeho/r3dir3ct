@@ -49,6 +49,19 @@ function extractSiteHostname(url) {
   }
 }
 
+/**
+ * True if `host` equals `blocked` or is a subdomain of it (e.g. ca.shein.com / m.shein.com for shein.com).
+ * Domains should be hostnames only (no scheme/path), lowercased.
+ */
+function hostnameMatchesBlockedEntry(host, blocked) {
+  const h = host.toLowerCase();
+  const b = String(blocked).trim().toLowerCase();
+  if (!b) {
+    return false;
+  }
+  return h === b || h.endsWith(`.${b}`);
+}
+
 async function getSettings() {
   const syncData = await chrome.storage.sync.get([
     STORAGE_SYNC_KEYS.blacklist,
@@ -75,14 +88,21 @@ async function updateRules() {
   let chainExclude = localData.lastRedirectSlug || undefined;
 
   const addRules = [];
+  let ruleId = 0;
 
   for (let index = 0; index < blacklist.length; index++) {
+    const domain = String(blacklist[index] ?? "").trim().toLowerCase();
+    if (!domain) {
+      continue;
+    }
+
     // eslint-disable-next-line no-await-in-loop
     const selected = await pickNextProblem(chainExclude);
     chainExclude = selected.slug;
 
+    ruleId += 1;
     addRules.push({
-      id: index + 1,
+      id: ruleId,
       priority: 1,
       action: {
         type: "redirect",
@@ -91,7 +111,7 @@ async function updateRules() {
         }
       },
       condition: {
-        urlFilter: `*${blacklist[index]}*`,
+        requestDomains: [domain],
         resourceTypes: ["main_frame"]
       }
     });
@@ -152,7 +172,14 @@ async function trackRedirectAttempt(url) {
     return;
   }
 
-  const isBlocked = blacklist.some((domain) => url.includes(domain));
+  let hostname;
+  try {
+    hostname = new URL(url).hostname.toLowerCase();
+  } catch {
+    return;
+  }
+
+  const isBlocked = blacklist.some((blocked) => hostnameMatchesBlockedEntry(hostname, blocked));
   if (!isBlocked) {
     return;
   }

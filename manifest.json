@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "101",
   "name": "r3dir3ct",
   "version": "1.0.0",
   "description": "r3dir3ct blocks distracting websites and redirects you to a random problem instead.",
