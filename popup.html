@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>r3dir3ct</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0d1117;
+        --surface: #161b22;
+        --border: #30363d;
+        --prompt: #7ee787;
+        --cmd: #e6edf3;
+        --muted: #8b949e;
+        --accent: #79c0ff;
+        --warn: #f78166;
+        --easy: #3fb950;
+        --medium: #d29922;
+        --hard: #f85149;
+      }
+
+      * {
+        box-sizing: border-box;
+        font-family: "JetBrains Mono", "Fira Code", monospace;
+      }
+
+      body {
+        margin: 0;
+        width: 340px;
+        min-height: 330px;
+        max-height: 420px;
+        color: var(--cmd);
+        background: var(--bg);
+      }
+
+      .app {
+        border: 1px solid var(--border);
+        background: var(--bg);
+      }
+
+      .titlebar {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 30px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .dots {
+        position: absolute;
+        left: 10px;
+        display: flex;
+        gap: 6px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 10px;
+      }
+
+      .dot.red {
+        background: #ff5f57;
+      }
+      .dot.yellow {
+        background: #febc2e;
+      }
+      .dot.green {
+        background: #28c840;
+      }
+
+      .title {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .content {
+        padding: 12px;
+      }
+
+      .line {
+        margin: 4px 0;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .line .arrow,
+      .line .dollar {
+        color: var(--prompt);
+      }
+
+      .line .cmd {
+        color: var(--cmd);
+      }
+
+      .line .val {
+        color: var(--accent);
+      }
+
+      .line .warn {
+        color: var(--warn);
+      }
+
+      .line .easy {
+        color: var(--easy);
+      }
+
+      .line .medium {
+        color: var(--medium);
+      }
+
+      .line .hard {
+        color: var(--hard);
+      }
+
+      .section {
+        margin-top: 12px;
+      }
+
+      #sites-list {
+        margin-top: 4px;
+      }
+
+      .site-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0 6px 12px;
+        cursor: default;
+      }
+
+      .site-row:hover {
+        background: #1c2128;
+      }
+
+      .remove-btn {
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: var(--warn);
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .site-name {
+        color: var(--cmd);
+      }
+
+      .input-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0 0 12px;
+      }
+
+      #site-input {
+        flex: 1;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: var(--cmd);
+        font-size: 12px;
+        caret-color: transparent;
+      }
+
+      #site-input::placeholder {
+        color: var(--muted);
+      }
+
+      .fake-caret {
+        width: 7px;
+        height: 14px;
+        background: var(--cmd);
+        animation: blink 1s step-end infinite;
+      }
+
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      .toggle-badge {
+        cursor: pointer;
+      }
+
+      .toggle-badge.active {
+        color: var(--easy);
+      }
+
+      .toggle-badge.paused {
+        color: var(--warn);
+      }
+
+      .bottom {
+        margin-top: 10px;
+        border-top: 1px solid var(--border);
+        padding-top: 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: var(--muted);
+      }
+
+      .rand-link {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        padding: 0;
+      }
+
+      .rand-link:hover {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="titlebar">
+        <div class="dots">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+        </div>
+        <span class="title">leetcode-redirect</span>
+      </div>
+
+      <div class="content">
+        <div class="line">
+          <span class="arrow">→</span> <span class="cmd">status</span>
+        </div>
+        <div class="line">
+          blocking <span class="val" id="blocked-count">0</span> sites ·
+          <span class="val" id="redirects-today">0</span> redirects today
+        </div>
+        <div class="line">
+          last redirect <span class="arrow">→</span>
+          <span class="warn" id="last-slug">none</span>
+        </div>
+        <div class="line">
+          difficulty <span class="arrow">→</span>
+          <span id="last-difficulty" class="val">n/a</span>
+        </div>
+
+        <div class="section">
+          <div class="line">
+            <span class="arrow">→</span> <span class="cmd">blocked sites</span>
+          </div>
+          <div id="sites-list"></div>
+          <div class="input-row">
+            <span class="dollar">$</span>
+            <input id="site-input" type="text" placeholder="add domain..." />
+            <span class="fake-caret" aria-hidden="true"></span>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="line">
+            <span class="arrow">→</span> extension
+            <span id="toggle-state" class="toggle-badge active">[ACTIVE]</span>
+          </div>
+        </div>
+
+        <div class="bottom">
+          <span>streak: <span class="val" id="streak-days">0d</span></span>
+          <button class="rand-link" id="random-link">→ random problem ↗</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
