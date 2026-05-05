@@ -1,4 +1,6 @@
-import { problems } from "./problems.js";
+import { pickNextProblem, noteRedirectForSrs, updateRecord } from "./srs.js";
+import { checkSolved } from "./graphql.js";
+import { logRedirect, updateSolveStatus } from "./behavior.js";
 
 const DEFAULT_BLACKLIST = [
   "reddit.com",
@@ -21,7 +23,15 @@ const STORAGE_LOCAL_KEYS = {
   todayCount: "redirectsToday",
   todayDate: "redirectsDate",
   streak: "redirectStreak",
-  lastRedirectDay: "lastRedirectDay"
+  lastRedirectDay: "lastRedirectDay",
+  srs: "srs",
+  pendingChecks: "pendingChecks"
+};
+
+const SRS_INIT = {
+  records: {},
+  totalRedirects: 0,
+  lastSlug: ""
 };
 
 const tabRedirectGuard = new Map();
@@ -30,14 +40,13 @@ function getTodayISO() {
   return new Date().toISOString().split("T")[0];
 }
 
-function normalizeDomain(value) {
-  return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
-}
-
-function getRandomProblem(excludedSlug = null) {
-  const pool = problems.filter((problem) => problem.slug !== excludedSlug);
-  const source = pool.length > 0 ? pool : problems;
-  return source[Math.floor(Math.random() * source.length)];
+function extractSiteHostname(url) {
+  try {
+    const u = new URL(url);
+    return u.hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
 }
 
 async function getSettings() {
@@ -63,13 +72,16 @@ async function updateRules() {
   }
 
   const localData = await chrome.storage.local.get([STORAGE_LOCAL_KEYS.lastSlug]);
-  let previousSlug = localData.lastRedirectSlug || null;
+  let chainExclude = localData.lastRedirectSlug || undefined;
 
-  const addRules = blacklist.map((domain, index) => {
-    const selected = getRandomProblem(previousSlug);
-    previousSlug = selected.slug;
+  const addRules = [];
 
-    return {
+  for (let index = 0; index < blacklist.length; index++) {
+    // eslint-disable-next-line no-await-in-loop
+    const selected = await pickNextProblem(chainExclude);
+    chainExclude = selected.slug;
+
+    addRules.push({
       id: index + 1,
       priority: 1,
       action: {
@@ -79,11 +91,11 @@ async function updateRules() {
         }
       },
       condition: {
-        urlFilter: `*${domain}*`,
+        urlFilter: `*${blacklist[index]}*`,
         resourceTypes: ["main_frame"]
       }
-    };
-  });
+    });
+  }
 
   await chrome.declarativeNetRequest.updateDynamicRules({
     removeRuleIds,
@@ -111,7 +123,8 @@ async function initializeDefaults() {
   const localData = await chrome.storage.local.get([
     STORAGE_LOCAL_KEYS.todayCount,
     STORAGE_LOCAL_KEYS.todayDate,
-    STORAGE_LOCAL_KEYS.streak
+    STORAGE_LOCAL_KEYS.streak,
+    STORAGE_LOCAL_KEYS.srs
   ]);
   const today = getTodayISO();
   const localPatch = {};
@@ -124,6 +137,9 @@ async function initializeDefaults() {
   }
   if (typeof localData.redirectStreak !== "number") {
     localPatch.redirectStreak = 0;
+  }
+  if (!localData.srs || typeof localData.srs !== "object") {
+    localPatch.srs = { ...SRS_INIT };
   }
   if (Object.keys(localPatch).length > 0) {
     await chrome.storage.local.set(localPatch);
@@ -146,10 +162,12 @@ async function trackRedirectAttempt(url) {
     STORAGE_LOCAL_KEYS.todayCount,
     STORAGE_LOCAL_KEYS.todayDate,
     STORAGE_LOCAL_KEYS.streak,
-    STORAGE_LOCAL_KEYS.lastRedirectDay
+    STORAGE_LOCAL_KEYS.lastRedirectDay,
+    STORAGE_LOCAL_KEYS.pendingChecks
   ]);
 
-  const selected = getRandomProblem(localData.lastRedirectSlug || null);
+  const selected = await pickNextProblem();
+  const redirectedAt = Date.now();
   const today = getTodayISO();
   const previousDate = localData.redirectsDate;
   const todayCount = previousDate === today ? (localData.redirectsToday || 0) + 1 : 1;
@@ -168,6 +186,8 @@ async function trackRedirectAttempt(url) {
     }
   }
 
+  const site = extractSiteHostname(url);
+
   await chrome.storage.local.set({
     redirectsToday: todayCount,
     redirectsDate: today,
@@ -176,6 +196,19 @@ async function trackRedirectAttempt(url) {
     redirectStreak: streak,
     lastRedirectDay: today
   });
+
+  await logRedirect({ timestamp: redirectedAt, site, slug: selected.slug });
+  await noteRedirectForSrs(selected.slug);
+
+  const alarmName = `checkSolve__${selected.slug}__${redirectedAt}`;
+  const pendingMap =
+    localData.pendingChecks && typeof localData.pendingChecks === "object"
+      ? { ...localData.pendingChecks }
+      : {};
+  pendingMap[alarmName] = { slug: selected.slug, redirectedAt };
+  await chrome.storage.local.set({ pendingChecks: pendingMap });
+
+  await chrome.alarms.create(alarmName, { delayInMinutes: 15 });
 
   await updateRules();
 }
@@ -197,6 +230,39 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
   if (changes.blacklist || changes.enabled) {
     await updateRules();
   }
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (!alarm.name.startsWith("checkSolve__")) {
+    return;
+  }
+
+  const localRaw = await chrome.storage.local.get([STORAGE_LOCAL_KEYS.pendingChecks]);
+  const pendingMap =
+    localRaw.pendingChecks && typeof localRaw.pendingChecks === "object"
+      ? { ...localRaw.pendingChecks }
+      : {};
+  const payload = pendingMap[alarm.name];
+  delete pendingMap[alarm.name];
+  await chrome.storage.local.set({ pendingChecks: pendingMap });
+
+  if (!payload || typeof payload.slug !== "string" || typeof payload.redirectedAt !== "number") {
+    return;
+  }
+
+  const syncUser = await chrome.storage.sync.get(["lcUsername"]);
+  const username = typeof syncUser.lcUsername === "string" ? syncUser.lcUsername.trim() : "";
+  if (!username) {
+    return;
+  }
+
+  const outcome = await checkSolved(username, payload.slug, payload.redirectedAt);
+  if (outcome === null) {
+    return;
+  }
+
+  await updateSolveStatus(payload.slug, payload.redirectedAt, outcome.solved);
+  await updateRecord(payload.slug, outcome.quality);
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {

@@ -200,14 +200,80 @@
         color: var(--warn);
       }
 
-      .bottom {
+      .bottom-nav {
         margin-top: 10px;
         border-top: 1px solid var(--border);
         padding-top: 8px;
         display: flex;
+        flex-wrap: wrap;
         justify-content: space-between;
         align-items: center;
+        gap: 8px;
         color: var(--muted);
+      }
+
+      .bottom-tabs {
+        display: flex;
+        gap: 8px;
+      }
+
+      .bottom-rand {
+        padding: 6px 0 0;
+        text-align: right;
+        color: var(--muted);
+      }
+
+      .panel-hidden {
+        display: none;
+      }
+
+      #heatmap-canvas {
+        display: block;
+        margin-top: 8px;
+        cursor: default;
+      }
+
+      .queue-row {
+        padding: 6px 0 6px 12px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .muted-inline {
+        color: var(--muted);
+      }
+
+      .queue-mark-bang {
+        color: var(--warn);
+      }
+
+      .queue-mark-slot {
+        color: var(--muted);
+      }
+
+      .queue-slug-overdue {
+        color: var(--cmd);
+      }
+
+      .queue-slug-soon {
+        color: var(--muted);
+      }
+
+      .queue-row .easy {
+        color: var(--easy);
+      }
+
+      .queue-row .medium {
+        color: var(--medium);
+      }
+
+      .queue-row .hard {
+        color: var(--hard);
+      }
+
+      .lc-saved-line {
+        color: var(--accent);
+        font-size: 11px;
       }
 
       .rand-link {
@@ -231,10 +297,11 @@
           <span class="dot yellow"></span>
           <span class="dot green"></span>
         </div>
-        <span class="title">leetcode-redirect</span>
+        <span class="title">r3dir3ct</span>
       </div>
 
       <div class="content">
+        <div id="view-main">
         <div class="line">
           <span class="arrow">→</span> <span class="cmd">status</span>
         </div>
@@ -270,9 +337,45 @@
           </div>
         </div>
 
-        <div class="bottom">
+        <div class="section">
+          <div class="line">
+            <span class="arrow">→</span> <span class="cmd">leetcode user</span>
+          </div>
+          <div class="line lc-saved-line panel-hidden" id="lc-saved">→ saved ✓</div>
+          <div class="input-row">
+            <span class="dollar">$</span>
+            <input id="lc-username-input" type="text" autocomplete="off" placeholder="username..." />
+            <span class="fake-caret" aria-hidden="true"></span>
+          </div>
+        </div>
+
+        <div class="bottom-nav">
           <span>streak: <span class="val" id="streak-days">0d</span></span>
-          <button class="rand-link" id="random-link">→ random problem ↗</button>
+          <span class="bottom-tabs">
+            <button type="button" class="rand-link" id="tab-heatmap">[→ heatmap]</button>
+            <button type="button" class="rand-link" id="tab-queue">[→ queue]</button>
+          </span>
+        </div>
+        <div class="bottom-rand">
+          <button type="button" class="rand-link" id="random-link">→ random problem ↗</button>
+        </div>
+        </div>
+
+        <div id="view-heatmap" class="panel-hidden">
+          <div class="line"><span class="arrow">→</span> craving heatmap (last 30d)</div>
+          <canvas id="heatmap-canvas" width="260" height="90"></canvas>
+          <div class="line" id="heatmap-peak">peak: —</div>
+          <div class="section">
+            <button type="button" class="rand-link" id="heatmap-back">→ back</button>
+          </div>
+        </div>
+
+        <div id="view-queue" class="panel-hidden">
+          <div class="line"><span class="arrow">→</span> <span id="queue-header">due problems (0)</span></div>
+          <div id="queue-list"></div>
+          <div class="section">
+            <button type="button" class="rand-link" id="queue-back">→ back</button>
+          </div>
         </div>
       </div>
     </div>
