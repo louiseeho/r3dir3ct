@@ -18,7 +18,8 @@ const SYNC_KEYS = {
   enabled: "enabled",
   lcUsername: "lcUsername",
   redirectMode: STORAGE_REDIRECT_MODE,
-  customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL
+  customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL,
+  shameLevel: "shameLevel"
 };
 
 const LOCAL_KEYS = {
@@ -58,8 +59,11 @@ const lcInputEl = document.getElementById("lc-username-input");
 const lcSavedEl = document.getElementById("lc-saved");
 
 const lcHelpTooltipEl = document.getElementById("lc-help-tooltip-desc");
-const lcHelpTipWrapEl = document.querySelector(".lc-help-tip");
+const lcHelpTipWrapEl = document.querySelector(".leetcode-only .lc-help-tip");
 const lcHelpTipBtnEl = document.getElementById("lc-help-tip-btn");
+const shameHelpTipWrapEl = document.querySelector(".shame-help-tip-inline");
+const shameHelpTipBtnEl = document.getElementById("shame-help-tip-btn");
+const shameHelpTooltipEl = document.getElementById("shame-help-tooltip-desc");
 const contentScrollerEl = document.querySelector(".content");
 
 const redirectModeSelectEl = document.getElementById("redirect-mode-select");
@@ -68,6 +72,7 @@ const customUrlInputEl = document.getElementById("custom-url-input");
 const customUrlFeedbackEl = document.getElementById("custom-url-feedback");
 const customTargetDisplayEl = document.getElementById("custom-target-display");
 const customUrlMissingHintEl = document.getElementById("custom-url-missing");
+const shameTokensEl = document.getElementById("shame-level-tokens");
 
 /** @type {"main" | "heatmap" | "queue"} */
 let activeView = "main";
@@ -81,6 +86,33 @@ function getTodayISO() {
 
 function normalizeDomain(input) {
   return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+}
+
+function normalizeShameLevelUi(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    return 2;
+  }
+  return Math.min(5, Math.max(1, Math.round(n)));
+}
+
+function renderShameLevelTokens(levelRaw) {
+  if (!shameTokensEl) {
+    return;
+  }
+  const active = normalizeShameLevelUi(levelRaw);
+  shameTokensEl.innerHTML = "";
+  for (let i = 1; i <= 5; i++) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `shame-token${i === active ? " shame-selected" : ""}`;
+    btn.textContent = `[${i}]`;
+    btn.addEventListener("click", async () => {
+      await chrome.storage.sync.set({ shameLevel: i });
+      renderShameLevelTokens(i);
+    });
+    shameTokensEl.appendChild(btn);
+  }
 }
 
 function renderDifficulty(value) {
@@ -197,7 +229,8 @@ async function fetchState() {
       SYNC_KEYS.enabled,
       SYNC_KEYS.lcUsername,
       SYNC_KEYS.redirectMode,
-      SYNC_KEYS.customRedirectUrl
+      SYNC_KEYS.customRedirectUrl,
+      SYNC_KEYS.shameLevel
     ]),
     chrome.storage.local.get([
       LOCAL_KEYS.lastSlug,
@@ -238,7 +271,8 @@ async function fetchState() {
     streak: localData.redirectStreak || 0,
     redirectMode,
     customRedirectUrl,
-    rawCustomUrlStored
+    rawCustomUrlStored,
+    shameLevel: normalizeShameLevelUi(syncData.shameLevel)
   };
 }
 
@@ -301,6 +335,7 @@ async function renderMain() {
 
   renderSites(state.blacklist);
   renderToggle(state.enabled);
+  renderShameLevelTokens(state.shameLevel);
   syncAllFollowingCarets();
 }
 
@@ -496,6 +531,7 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     changes.lcUsername ||
     changes.redirectMode ||
     changes.customRedirectUrl ||
+    changes.shameLevel ||
     changes.lastRedirectSlug ||
     changes.lastRedirectDifficulty ||
     changes.redirectsToday ||
@@ -524,6 +560,71 @@ for (const el of [siteInputEl, customUrlInputEl, lcInputEl]) {
 
 /** @type {number} */
 let lcTooltipHideTimer = 0;
+
+/** @type {number} */
+let shameTooltipHideTimer = 0;
+
+function cancelShameTooltipHide() {
+  if (shameTooltipHideTimer) {
+    window.clearTimeout(shameTooltipHideTimer);
+    shameTooltipHideTimer = 0;
+  }
+}
+
+function hideShameHelpTooltip() {
+  cancelShameTooltipHide();
+  if (shameHelpTooltipEl) {
+    shameHelpTooltipEl.classList.add("panel-hidden");
+    shameHelpTooltipEl.style.left = "";
+    shameHelpTooltipEl.style.top = "";
+    shameHelpTooltipEl.style.visibility = "";
+  }
+  shameHelpTipBtnEl?.setAttribute("aria-expanded", "false");
+}
+
+function layoutShameHelpTooltip() {
+  if (!shameHelpTooltipEl || !shameHelpTipBtnEl) {
+    return;
+  }
+
+  shameHelpTooltipEl.classList.remove("panel-hidden");
+
+  shameHelpTooltipEl.style.visibility = "hidden";
+  shameHelpTooltipEl.style.left = "0";
+  shameHelpTooltipEl.style.top = "0";
+
+  requestAnimationFrame(() => {
+    const br = shameHelpTipBtnEl.getBoundingClientRect();
+    const pr = shameHelpTooltipEl.getBoundingClientRect();
+
+    const M = 10;
+    const gap = 8;
+    let top = br.bottom + gap;
+    let left = br.left + br.width / 2 - pr.width / 2;
+    left = Math.max(M, Math.min(left, window.innerWidth - pr.width - M));
+
+    if (top + pr.height > window.innerHeight - M) {
+      top = br.top - pr.height - gap;
+    }
+    top = Math.max(M, Math.min(top, window.innerHeight - pr.height - M));
+
+    shameHelpTooltipEl.style.left = `${Math.round(left)}px`;
+    shameHelpTooltipEl.style.top = `${Math.round(top)}px`;
+    shameHelpTooltipEl.style.visibility = "";
+  });
+
+  shameHelpTipBtnEl.setAttribute("aria-expanded", "true");
+}
+
+function scheduleShameTooltipHide() {
+  cancelShameTooltipHide();
+  shameTooltipHideTimer = window.setTimeout(() => hideShameHelpTooltip(), 160);
+}
+
+function showShameHelpTooltip() {
+  cancelShameTooltipHide();
+  layoutShameHelpTooltip();
+}
 
 function cancelLcTooltipHide() {
   if (lcTooltipHideTimer) {
@@ -603,6 +704,9 @@ if (lcHelpTipWrapEl && lcHelpTooltipEl && lcHelpTipBtnEl) {
       if (lcHelpTooltipEl && !lcHelpTooltipEl.classList.contains("panel-hidden")) {
         layoutLcHelpTooltip();
       }
+      if (shameHelpTooltipEl && !shameHelpTooltipEl.classList.contains("panel-hidden")) {
+        layoutShameHelpTooltip();
+      }
     },
     { passive: true }
   );
@@ -611,17 +715,33 @@ if (lcHelpTipWrapEl && lcHelpTooltipEl && lcHelpTipBtnEl) {
     if (lcHelpTooltipEl && !lcHelpTooltipEl.classList.contains("panel-hidden")) {
       layoutLcHelpTooltip();
     }
+    if (shameHelpTooltipEl && !shameHelpTooltipEl.classList.contains("panel-hidden")) {
+      layoutShameHelpTooltip();
+    }
   });
 
   document.addEventListener("keydown", (event) => {
-    if (
-      event.key === "Escape" &&
-      lcHelpTooltipEl &&
-      !lcHelpTooltipEl.classList.contains("panel-hidden")
-    ) {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (lcHelpTooltipEl && !lcHelpTooltipEl.classList.contains("panel-hidden")) {
       hideLcHelpTooltip();
     }
+    if (shameHelpTooltipEl && !shameHelpTooltipEl.classList.contains("panel-hidden")) {
+      hideShameHelpTooltip();
+    }
   });
+}
+
+if (shameHelpTipWrapEl && shameHelpTooltipEl && shameHelpTipBtnEl) {
+  shameHelpTipWrapEl.addEventListener("mouseenter", showShameHelpTooltip);
+  shameHelpTipWrapEl.addEventListener("mouseleave", scheduleShameTooltipHide);
+
+  shameHelpTooltipEl.addEventListener("mouseenter", cancelShameTooltipHide);
+  shameHelpTooltipEl.addEventListener("mouseleave", scheduleShameTooltipHide);
+
+  shameHelpTipBtnEl.addEventListener("focus", showShameHelpTooltip);
+  shameHelpTipBtnEl.addEventListener("blur", scheduleShameTooltipHide);
 }
 
 renderMain();

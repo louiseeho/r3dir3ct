@@ -197,6 +197,67 @@
         color: var(--cmd);
       }
 
+      .shame-block {
+        margin-top: 10px;
+      }
+
+      .shame-heading-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .shame-token-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        justify-items: center;
+        column-gap: 2px;
+        margin-top: 10px;
+        width: min(260px, 100%);
+      }
+
+      .shame-scale-labels {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        justify-items: center;
+        column-gap: 2px;
+        margin-top: 5px;
+        width: min(260px, 100%);
+        font-size: 11px;
+        color: var(--muted);
+        letter-spacing: 0.02em;
+      }
+
+      .shame-scale-labels .shame-scale-gentle {
+        grid-column: 1;
+      }
+
+      .shame-scale-labels .shame-scale-brutal {
+        grid-column: 5;
+      }
+
+      .shame-token {
+        display: inline-block;
+        border: 0;
+        padding: 0 4px;
+        margin: 0;
+        background: transparent;
+        color: #8b949e;
+        font: inherit;
+        cursor: pointer;
+        line-height: inherit;
+      }
+
+      .shame-token:hover {
+        color: var(--cmd);
+      }
+
+      .shame-token.shame-selected {
+        color: #7ee787;
+        font-weight: 700;
+      }
+
       .input-row {
         display: flex;
         align-items: center;
@@ -499,6 +560,14 @@
         outline: none;
       }
 
+      .shame-help-tip-inline {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        margin-left: 2px;
+        vertical-align: middle;
+      }
+
       /* Portal tip: positioned with JS (`position: fixed`) so `.content overflow-y:auto` scrollbars don’t grow. */
       .lc-help-tip-floating {
         position: fixed;
@@ -588,6 +657,29 @@
             <div class="input-with-caret">
               <input id="site-input" type="text" placeholder="add domain..." />
               <span class="fake-caret" aria-hidden="true"></span>
+            </div>
+          </div>
+          <div class="shame-block">
+            <div class="line shame-heading-line">
+              <span><span class="arrow">→</span> shame level</span>
+              <span class="shame-help-tip-inline">
+                <button
+                  id="shame-help-tip-btn"
+                  type="button"
+                  class="lc-help-tip-btn"
+                  aria-label="What shame level does"
+                  aria-expanded="false"
+                  aria-controls="shame-help-tooltip-desc"
+                  aria-describedby="shame-help-tooltip-desc"
+                >
+                  ?
+                </button>
+              </span>
+            </div>
+            <div id="shame-level-tokens" class="shame-token-grid"></div>
+            <div class="shame-scale-labels" aria-hidden="true">
+              <span class="shame-scale-gentle">gentle</span>
+              <span class="shame-scale-brutal">brutal</span>
             </div>
           </div>
         </div>
@@ -711,6 +803,11 @@
       After you're redirected to a problem, this extension waits, then asks LeetCode (in your logged-in browser session)
       whether you got an accepted submission. Those results update the review queue and mark attempts on your craving
       timeline.
+    </div>
+
+    <div id="shame-help-tooltip-desc" class="lc-help-tip-floating panel-hidden" role="tooltip">
+      Shame level controls how harsh the banner message is before you're sent to a LeetCode problem. Raise it for sharper
+      callouts or keep it low for softer nudges.
     </div>
 
     <script type="module" src="popup.js"></script>

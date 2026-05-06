@@ -8,6 +8,7 @@ import {
   STORAGE_REDIRECT_MODE,
   STORAGE_CUSTOM_REDIRECT_URL
 } from "./redirect-settings.js";
+import { messages as shameMessages } from "./messages.js";
 
 const DEFAULT_BLACKLIST = [
   "reddit.com",
@@ -23,7 +24,8 @@ const STORAGE_SYNC_KEYS = {
   blacklist: "blacklist",
   enabled: "enabled",
   redirectMode: STORAGE_REDIRECT_MODE,
-  customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL
+  customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL,
+  shameLevel: "shameLevel"
 };
 
 const STORAGE_LOCAL_KEYS = {
@@ -33,10 +35,38 @@ const STORAGE_LOCAL_KEYS = {
   todayDate: "redirectsDate",
   streak: "redirectStreak",
   lastRedirectDay: "lastRedirectDay",
-  pendingChecks: "pendingChecks"
+  pendingChecks: "pendingChecks",
+  dodgesToday: "dodgesToday",
+  streakDays: "streakDays",
+  shameOverlay: "shameOverlay"
 };
 
 const tabRedirectGuard = new Map();
+
+function normalizeShameLevel(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    return 2;
+  }
+  return Math.min(5, Math.max(1, Math.round(n)));
+}
+
+function applyShamePlaceholders(text, dodge, streak) {
+  return String(text)
+    .replace(/DODGE_COUNT/g, String(dodge))
+    .replace(/STREAK/g, String(streak));
+}
+
+function pickRandomShameQuotedMessage(level, dodge, streak) {
+  const lv = normalizeShameLevel(level);
+  const bank = shameMessages[lv] || shameMessages[2];
+  const raw = bank[Math.floor(Math.random() * bank.length)];
+  return `"${applyShamePlaceholders(raw, dodge, streak)}"`;
+}
+
+function leetcodeProblemUrl(slug) {
+  return `https://leetcode.com/problems/${slug}/`;
+}
 
 function getTodayISO() {
   return new Date().toISOString().split("T")[0];
@@ -162,7 +192,7 @@ async function updateRules() {
         action: {
           type: "redirect",
           redirect: {
-            url: `https://leetcode.com/problems/${selected.slug}/`
+            url: leetcodeProblemUrl(selected.slug)
           }
         },
         condition: {
@@ -186,7 +216,8 @@ async function updateRules() {
 async function initializeDefaults() {
   const syncData = await chrome.storage.sync.get([
     STORAGE_SYNC_KEYS.blacklist,
-    STORAGE_SYNC_KEYS.enabled
+    STORAGE_SYNC_KEYS.enabled,
+    STORAGE_SYNC_KEYS.shameLevel
   ]);
 
   const syncPatch = {};
@@ -196,6 +227,10 @@ async function initializeDefaults() {
   if (typeof syncData.enabled !== "boolean") {
     syncPatch.enabled = true;
   }
+  const sl = syncData.shameLevel;
+  if (typeof sl !== "number" || sl < 1 || sl > 5) {
+    syncPatch.shameLevel = 2;
+  }
   if (Object.keys(syncPatch).length > 0) {
     await chrome.storage.sync.set(syncPatch);
   }
@@ -203,7 +238,9 @@ async function initializeDefaults() {
   const localData = await chrome.storage.local.get([
     STORAGE_LOCAL_KEYS.todayCount,
     STORAGE_LOCAL_KEYS.todayDate,
-    STORAGE_LOCAL_KEYS.streak
+    STORAGE_LOCAL_KEYS.streak,
+    STORAGE_LOCAL_KEYS.dodgesToday,
+    STORAGE_LOCAL_KEYS.streakDays
   ]);
   const today = getTodayISO();
   const localPatch = {};
@@ -213,9 +250,20 @@ async function initializeDefaults() {
   if (localData.redirectsDate !== today) {
     localPatch.redirectsDate = today;
     localPatch.redirectsToday = 0;
+    localPatch.dodgesToday = 0;
   }
   if (typeof localData.redirectStreak !== "number") {
     localPatch.redirectStreak = 0;
+  }
+  if (typeof localData.dodgesToday !== "number" && localPatch.dodgesToday === undefined) {
+    const seed =
+      typeof localData.redirectsToday === "number" ? localData.redirectsToday : (localPatch.redirectsToday ?? 0);
+    localPatch.dodgesToday = seed;
+  }
+  if (typeof localData.streakDays !== "number" && localPatch.streakDays === undefined) {
+    const seedStreak =
+      typeof localData.redirectStreak === "number" ? localData.redirectStreak : (localPatch.redirectStreak ?? 0);
+    localPatch.streakDays = seedStreak;
   }
   await ensureScheduleBlobSeeded();
   if (Object.keys(localPatch).length > 0) {
@@ -293,8 +341,6 @@ async function trackRedirectAttempt(tabId, url) {
       STORAGE_LOCAL_KEYS.lastRedirectDay
     ]);
 
-    await redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, customRedirectUrl);
-
     const redirectedAt = Date.now();
     const today = getTodayISO();
     const previousDate = localLite.redirectsDate;
@@ -320,16 +366,23 @@ async function trackRedirectAttempt(tabId, url) {
     await chrome.storage.local.set({
       redirectsToday: todayCount,
       redirectsDate: today,
+      dodgesToday: todayCount,
+      streakDays: streak,
       lastRedirectSlug: "__custom__",
       lastRedirectDifficulty: "n/a",
       redirectStreak: streak,
       lastRedirectDay: today
     });
 
+    await redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, customRedirectUrl);
+
     await logRedirect({ timestamp: redirectedAt, site, slug: "__custom__" });
     await updateRules();
     return;
   }
+
+  const shameSync = await chrome.storage.sync.get([STORAGE_SYNC_KEYS.shameLevel]);
+  const shameLevel = normalizeShameLevel(shameSync.shameLevel);
 
   const localData = await chrome.storage.local.get([
     STORAGE_LOCAL_KEYS.lastSlug,
@@ -341,8 +394,7 @@ async function trackRedirectAttempt(tabId, url) {
   ]);
 
   const selected = await pickNextProblem();
-  const destinationUrl = `https://leetcode.com/problems/${selected.slug}/`;
-  await redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, destinationUrl);
+  const destinationUrl = leetcodeProblemUrl(selected.slug);
 
   const redirectedAt = Date.now();
   const today = getTodayISO();
@@ -364,14 +416,22 @@ async function trackRedirectAttempt(tabId, url) {
   }
 
   const site = extractSiteHostname(url);
+  const shameText = pickRandomShameQuotedMessage(shameLevel, todayCount, streak);
 
   await chrome.storage.local.set({
     redirectsToday: todayCount,
     redirectsDate: today,
+    dodgesToday: todayCount,
+    streakDays: streak,
     lastRedirectSlug: selected.slug,
     lastRedirectDifficulty: selected.difficulty,
     redirectStreak: streak,
-    lastRedirectDay: today
+    lastRedirectDay: today,
+    [STORAGE_LOCAL_KEYS.shameOverlay]: {
+      slug: selected.slug,
+      text: shameText,
+      ts: redirectedAt
+    }
   });
 
   await logRedirect({ timestamp: redirectedAt, site, slug: selected.slug });
@@ -386,6 +446,8 @@ async function trackRedirectAttempt(tabId, url) {
   await chrome.storage.local.set({ pendingChecks: pendingMap });
 
   await chrome.alarms.create(alarmName, { delayInMinutes: 15 });
+
+  await redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, destinationUrl);
 
   await updateRules();
 }
@@ -408,7 +470,8 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     changes.blacklist ||
     changes.enabled ||
     changes.redirectMode ||
-    changes.customRedirectUrl
+    changes.customRedirectUrl ||
+    changes.shameLevel
   ) {
     await updateRules();
   }
