@@ -49,13 +49,25 @@ function extractSiteHostname(url) {
   }
 }
 
+function canonicalizeDomain(input) {
+  const raw = String(input ?? "").trim().toLowerCase();
+  if (!raw) {
+    return "";
+  }
+
+  // Accept entries like "https://www.example.com/path" and reduce to hostname.
+  const noScheme = raw.replace(/^[a-z]+:\/\//i, "");
+  const hostOnly = noScheme.replace(/^www\./i, "").replace(/[/?#].*$/, "").replace(/:\d+$/, "");
+  return hostOnly.replace(/^\.+|\.+$/g, "");
+}
+
 /**
  * True if `host` equals `blocked` or is a subdomain of it (e.g. ca.shein.com / m.shein.com for shein.com).
  * Domains should be hostnames only (no scheme/path), lowercased.
  */
 function hostnameMatchesBlockedEntry(host, blocked) {
   const h = host.toLowerCase();
-  const b = String(blocked).trim().toLowerCase();
+  const b = canonicalizeDomain(blocked);
   if (!b) {
     return false;
   }
@@ -91,7 +103,7 @@ async function updateRules() {
   let ruleId = 0;
 
   for (let index = 0; index < blacklist.length; index++) {
-    const domain = String(blacklist[index] ?? "").trim().toLowerCase();
+    const domain = canonicalizeDomain(blacklist[index]);
     if (!domain) {
       continue;
     }
@@ -111,16 +123,22 @@ async function updateRules() {
         }
       },
       condition: {
+        // requestDomains matches the host plus all subdomains; omits urlFilter so bare origins
+        // like https://ca.shein.com (no path) are still covered reliably.
         requestDomains: [domain],
         resourceTypes: ["main_frame"]
       }
     });
   }
 
-  await chrome.declarativeNetRequest.updateDynamicRules({
-    removeRuleIds,
-    addRules
-  });
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds,
+      addRules
+    });
+  } catch (err) {
+    console.error("r3dir3ct: updateDynamicRules failed", err);
+  }
 }
 
 async function initializeDefaults() {
@@ -166,7 +184,46 @@ async function initializeDefaults() {
   }
 }
 
-async function trackRedirectAttempt(url) {
+async function redirectTabIfStillOnBlockedSite(tabId, blacklist, selected) {
+  await new Promise((r) => setTimeout(r, 75));
+
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return;
+  }
+
+  const current = tab.url || "";
+  if (!current.startsWith("http")) {
+    return;
+  }
+
+  let host;
+  try {
+    host = new URL(current).hostname.toLowerCase();
+  } catch {
+    return;
+  }
+
+  if (current.startsWith("https://leetcode.com/problems/")) {
+    return;
+  }
+
+  const stillBlocked = blacklist.some((blocked) => hostnameMatchesBlockedEntry(host, blocked));
+  if (!stillBlocked) {
+    return;
+  }
+
+  const dest = `https://leetcode.com/problems/${selected.slug}/`;
+  try {
+    await chrome.tabs.update(tabId, { url: dest });
+  } catch {
+    // Ignore (e.g. missing permission for privileged tabs).
+  }
+}
+
+async function trackRedirectAttempt(tabId, url) {
   const { blacklist, enabled } = await getSettings();
   if (!enabled) {
     return;
@@ -194,6 +251,8 @@ async function trackRedirectAttempt(url) {
   ]);
 
   const selected = await pickNextProblem();
+  await redirectTabIfStillOnBlockedSite(tabId, blacklist, selected);
+
   const redirectedAt = Date.now();
   const today = getTodayISO();
   const previousDate = localData.redirectsDate;
@@ -293,7 +352,25 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
-  const candidateUrl = changeInfo.url || "";
+  // Often `changeInfo.url` is missing; `tabs.get` has the navigated URL reliably.
+  if (
+    changeInfo.url === undefined &&
+    changeInfo.status !== "loading" &&
+    changeInfo.status !== "complete"
+  ) {
+    return;
+  }
+
+  let candidateUrl = changeInfo.url || "";
+  if (!candidateUrl && (changeInfo.status === "loading" || changeInfo.status === "complete")) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      candidateUrl = tab.url || "";
+    } catch {
+      return;
+    }
+  }
+
   if (!candidateUrl || candidateUrl.startsWith("https://leetcode.com/problems/")) {
     return;
   }
@@ -305,5 +382,5 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   }
   tabRedirectGuard.set(tabId, now);
 
-  await trackRedirectAttempt(candidateUrl);
+  await trackRedirectAttempt(tabId, candidateUrl);
 });
