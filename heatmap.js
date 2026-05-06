@@ -10,12 +10,71 @@ function formatHour12(hour) {
 }
 
 /**
+ * @param {HTMLElement | null | undefined} el
+ */
+function hideHeatmapTooltip(el) {
+  if (!el) {
+    return;
+  }
+  el.classList.remove("heatmap-tooltip-visible");
+  delete el.dataset.hmHit;
+  el.innerHTML = "";
+}
+
+/**
+ * @param {HTMLElement} el
+ * @param {string} clock
+ * @param {string} day
+ * @param {number} n
+ */
+function showHeatmapTooltip(el, clock, day, n) {
+  el.innerHTML =
+    `<div class="heatmap-tooltip-title">${clock} · ${day}</div>` +
+    `<div class="heatmap-tooltip-sub">` +
+    `<span class="val">${n}</span> redirect attempt${n === 1 ? "" : "s"} in this slot` +
+    `</div>`;
+
+  el.classList.add("heatmap-tooltip-visible");
+}
+
+/**
+ * @param {HTMLElement} el
+ * @param {number} clientX
+ * @param {number} clientY
+ */
+function placeHeatmapTooltip(el, clientX, clientY) {
+  const offset = 14;
+  const margin = 10;
+  let x = Math.round(clientX + offset);
+  let y = Math.round(clientY + offset);
+  el.style.left = `${x}px`;
+  el.style.top = `${y}px`;
+
+  requestAnimationFrame(() => {
+    const r = el.getBoundingClientRect();
+    let nx = x;
+    let ny = y;
+    if (r.right > window.innerWidth - margin) {
+      nx = window.innerWidth - r.width - margin;
+    }
+    if (r.bottom > window.innerHeight - margin) {
+      ny = window.innerHeight - r.height - margin;
+    }
+    nx = Math.max(margin, nx);
+    ny = Math.max(margin, ny);
+    el.style.left = `${Math.round(nx)}px`;
+    el.style.top = `${Math.round(ny)}px`;
+  });
+}
+
+/**
  * Render 7 rows × 24 cols (hours as columns — row = dayOfWeek).
  * @param {HTMLCanvasElement} canvas
  * @param {number[][]} grid from getHeatmapData
+ * @param {HTMLElement | null} [tooltipEl] custom hover tooltip (instant vs native title delay)
  */
-export function renderHeatmap(canvas, grid) {
-  const CELL = 10;
+export function renderHeatmap(canvas, grid, tooltipEl) {
+  const CELL = 13;
   const GAP = 1;
   const COLS = 24;
   const ROWS = 7;
@@ -27,8 +86,11 @@ export function renderHeatmap(canvas, grid) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  ctx.fillStyle = "transparent";
-  ctx.clearRect(0, 0, w, h);
+  const gridLine = "#30363d";
+  const emptyCell = "#0d1117";
+
+  ctx.fillStyle = gridLine;
+  ctx.fillRect(0, 0, w, h);
 
   let max = 1;
   for (let r = 0; r < ROWS; r++) {
@@ -46,7 +108,7 @@ export function renderHeatmap(canvas, grid) {
       if (alpha > 0) {
         ctx.fillStyle = `rgba(126, 231, 135, ${alpha})`;
       } else {
-        ctx.fillStyle = "transparent";
+        ctx.fillStyle = emptyCell;
       }
       ctx.fillRect(x, y, CELL, CELL);
     }
@@ -54,26 +116,48 @@ export function renderHeatmap(canvas, grid) {
 
   canvas._heatmapMeta = { grid, max };
 
+  canvas.removeAttribute("title");
+
   canvas.onmousemove = (e) => {
     const meta = canvas._heatmapMeta;
-    if (!meta) return;
+    if (!meta) {
+      hideHeatmapTooltip(tooltipEl);
+      return;
+    }
     const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    if (!rect.width || !rect.height) {
+      hideHeatmapTooltip(tooltipEl);
+      return;
+    }
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const my = (e.clientY - rect.top) * scaleY;
     const hour = Math.floor((mx - GAP) / (CELL + GAP));
     const dow = Math.floor((my - GAP) / (CELL + GAP));
+
+    if (!tooltipEl) {
+      return;
+    }
+
     if (hour < 0 || hour >= COLS || dow < 0 || dow >= ROWS) {
-      canvas.title = "";
+      hideHeatmapTooltip(tooltipEl);
       return;
     }
     const n = meta.grid[dow]?.[hour] ?? 0;
     const day = DAY_NAMES[dow] || "day";
     const clock = formatHour12(hour);
-    canvas.title = `${clock} ${day} — ${n} attempt${n === 1 ? "" : "s"}`;
+
+    const hitKey = `${dow}:${hour}`;
+    if (tooltipEl.dataset.hmHit !== hitKey) {
+      tooltipEl.dataset.hmHit = hitKey;
+      showHeatmapTooltip(tooltipEl, clock, day, n);
+    }
+    placeHeatmapTooltip(tooltipEl, e.clientX, e.clientY);
   };
 
   canvas.onmouseleave = () => {
-    canvas.title = "";
+    hideHeatmapTooltip(tooltipEl);
   };
 }
 

@@ -50,11 +50,17 @@ const tabQueueBtn = document.getElementById("tab-queue");
 const heatmapBackBtn = document.getElementById("heatmap-back");
 const queueBackBtn = document.getElementById("queue-back");
 const heatmapCanvas = document.getElementById("heatmap-canvas");
+const heatmapTooltipEl = document.getElementById("heatmap-tooltip");
 const heatmapPeakEl = document.getElementById("heatmap-peak");
 const queueListEl = document.getElementById("queue-list");
 const queueHeaderEl = document.getElementById("queue-header");
 const lcInputEl = document.getElementById("lc-username-input");
 const lcSavedEl = document.getElementById("lc-saved");
+
+const lcHelpTooltipEl = document.getElementById("lc-help-tooltip-desc");
+const lcHelpTipWrapEl = document.querySelector(".lc-help-tip");
+const lcHelpTipBtnEl = document.getElementById("lc-help-tip-btn");
+const contentScrollerEl = document.querySelector(".content");
 
 const redirectModeSelectEl = document.getElementById("redirect-mode-select");
 const customUrlPanelEl = document.getElementById("custom-url-panel");
@@ -302,7 +308,8 @@ async function renderHeatmapPanel() {
   const raw = await chrome.storage.local.get([LOCAL_KEYS.behaviorLog]);
   const log = Array.isArray(raw.behaviorLog) ? raw.behaviorLog : [];
   const grid = getHeatmapData(log);
-  renderHeatmap(heatmapCanvas, grid);
+  renderHeatmap(heatmapCanvas, grid, heatmapTooltipEl);
+
   heatmapPeakEl.textContent = formatPeakLine(grid);
 }
 
@@ -513,6 +520,108 @@ for (const el of [siteInputEl, customUrlInputEl, lcInputEl]) {
   if (caret) {
     attachFollowingCaret(el, caret);
   }
+}
+
+/** @type {number} */
+let lcTooltipHideTimer = 0;
+
+function cancelLcTooltipHide() {
+  if (lcTooltipHideTimer) {
+    window.clearTimeout(lcTooltipHideTimer);
+    lcTooltipHideTimer = 0;
+  }
+}
+
+function hideLcHelpTooltip() {
+  cancelLcTooltipHide();
+  if (lcHelpTooltipEl) {
+    lcHelpTooltipEl.classList.add("panel-hidden");
+    lcHelpTooltipEl.style.left = "";
+    lcHelpTooltipEl.style.top = "";
+    lcHelpTooltipEl.style.visibility = "";
+  }
+  lcHelpTipBtnEl?.setAttribute("aria-expanded", "false");
+}
+
+function layoutLcHelpTooltip() {
+  if (!lcHelpTooltipEl || !lcHelpTipBtnEl) {
+    return;
+  }
+
+  lcHelpTooltipEl.classList.remove("panel-hidden");
+
+  lcHelpTooltipEl.style.visibility = "hidden";
+  lcHelpTooltipEl.style.left = "0";
+  lcHelpTooltipEl.style.top = "0";
+
+  requestAnimationFrame(() => {
+    const br = lcHelpTipBtnEl.getBoundingClientRect();
+    const pr = lcHelpTooltipEl.getBoundingClientRect();
+
+    const M = 10;
+    const gap = 8;
+    let top = br.bottom + gap;
+    let left = br.left + br.width / 2 - pr.width / 2;
+    left = Math.max(M, Math.min(left, window.innerWidth - pr.width - M));
+
+    if (top + pr.height > window.innerHeight - M) {
+      top = br.top - pr.height - gap;
+    }
+    top = Math.max(M, Math.min(top, window.innerHeight - pr.height - M));
+
+    lcHelpTooltipEl.style.left = `${Math.round(left)}px`;
+    lcHelpTooltipEl.style.top = `${Math.round(top)}px`;
+    lcHelpTooltipEl.style.visibility = "";
+  });
+
+  lcHelpTipBtnEl.setAttribute("aria-expanded", "true");
+}
+
+function scheduleLcTooltipHide() {
+  cancelLcTooltipHide();
+  lcTooltipHideTimer = window.setTimeout(() => hideLcHelpTooltip(), 160);
+}
+
+function showLcHelpTooltip() {
+  cancelLcTooltipHide();
+  layoutLcHelpTooltip();
+}
+
+if (lcHelpTipWrapEl && lcHelpTooltipEl && lcHelpTipBtnEl) {
+  lcHelpTipWrapEl.addEventListener("mouseenter", showLcHelpTooltip);
+  lcHelpTipWrapEl.addEventListener("mouseleave", scheduleLcTooltipHide);
+
+  lcHelpTooltipEl.addEventListener("mouseenter", cancelLcTooltipHide);
+  lcHelpTooltipEl.addEventListener("mouseleave", scheduleLcTooltipHide);
+
+  lcHelpTipBtnEl.addEventListener("focus", showLcHelpTooltip);
+  lcHelpTipBtnEl.addEventListener("blur", scheduleLcTooltipHide);
+
+  contentScrollerEl?.addEventListener(
+    "scroll",
+    () => {
+      if (lcHelpTooltipEl && !lcHelpTooltipEl.classList.contains("panel-hidden")) {
+        layoutLcHelpTooltip();
+      }
+    },
+    { passive: true }
+  );
+
+  window.addEventListener("resize", () => {
+    if (lcHelpTooltipEl && !lcHelpTooltipEl.classList.contains("panel-hidden")) {
+      layoutLcHelpTooltip();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (
+      event.key === "Escape" &&
+      lcHelpTooltipEl &&
+      !lcHelpTooltipEl.classList.contains("panel-hidden")
+    ) {
+      hideLcHelpTooltip();
+    }
+  });
 }
 
 renderMain();

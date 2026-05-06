@@ -125,6 +125,7 @@
         padding: 20px 24px 24px;
         flex: 1;
         overflow-y: auto;
+        overflow-x: clip;
       }
 
       .line {
@@ -296,8 +297,55 @@
 
       #heatmap-canvas {
         display: block;
+        width: min(337px, 100%);
+        height: auto;
+        aspect-ratio: 337 / 99;
         margin-top: 12px;
         cursor: default;
+      }
+
+      #heatmap-tooltip {
+        position: fixed;
+        z-index: 110000;
+        min-width: 160px;
+        max-width: 260px;
+        padding: 9px 12px;
+        margin: 0;
+        pointer-events: none;
+        visibility: hidden;
+        opacity: 0;
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.05),
+          0 14px 32px rgba(0, 0, 0, 0.5);
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.38;
+        text-align: left;
+        transition: opacity 0.07s ease, visibility 0.07s ease;
+      }
+
+      #heatmap-tooltip.heatmap-tooltip-visible {
+        visibility: visible;
+        opacity: 1;
+      }
+
+      #heatmap-tooltip .heatmap-tooltip-title {
+        color: var(--cmd);
+        font-weight: 500;
+        letter-spacing: 0.03em;
+        margin-bottom: 4px;
+      }
+
+      #heatmap-tooltip .heatmap-tooltip-sub {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      #heatmap-tooltip .heatmap-tooltip-sub .val {
+        color: var(--prompt);
       }
 
       .queue-row {
@@ -399,6 +447,75 @@
         font-size: 11px;
         margin-top: 6px;
         padding-left: 12px;
+      }
+
+      .dashboard-help {
+        margin: 8px 0 0;
+        padding: 0 12px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+
+      .dashboard-help p {
+        margin: 0 0 8px;
+      }
+
+      .dashboard-help p:last-child {
+        margin-bottom: 0;
+      }
+
+      .lc-help-tip {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        margin-left: 8px;
+        vertical-align: middle;
+      }
+
+      .lc-help-tip-btn {
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        margin: 0;
+        flex-shrink: 0;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 1;
+        cursor: help;
+      }
+
+      .lc-help-tip-btn:hover,
+      .lc-help-tip-btn:focus-visible {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+
+      .lc-help-tip-btn:focus {
+        outline: none;
+      }
+
+      /* Portal tip: positioned with JS (`position: fixed`) so `.content overflow-y:auto` scrollbars don’t grow. */
+      .lc-help-tip-floating {
+        position: fixed;
+        z-index: 100000;
+        box-sizing: border-box;
+        width: min(288px, calc(100vw - 24px));
+        margin: 0;
+        padding: 10px 12px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 400;
+        line-height: 1.55;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+        pointer-events: auto;
       }
 
       #custom-url-input {
@@ -516,6 +633,19 @@
         <div class="section leetcode-only">
           <div class="line">
             <span class="arrow">→</span> <span class="cmd">leetcode user</span>
+            <span class="lc-help-tip">
+              <button
+                id="lc-help-tip-btn"
+                type="button"
+                class="lc-help-tip-btn"
+                aria-label="How the username field is used"
+                aria-expanded="false"
+                aria-controls="lc-help-tooltip-desc"
+                aria-describedby="lc-help-tooltip-desc"
+              >
+                ?
+              </button>
+            </span>
           </div>
           <div class="line lc-saved-line panel-hidden" id="lc-saved">→ saved ✓</div>
           <div class="input-row">
@@ -540,8 +670,18 @@
         </div>
 
         <div id="view-heatmap" class="panel-hidden">
-          <div class="line"><span class="arrow">→</span> craving heatmap (last 30d)</div>
-          <canvas id="heatmap-canvas" width="264" height="90" aria-label="Craving heatmap last 30 days"></canvas>
+          <div class="line"><span class="arrow">→</span> craving heatmap · last 30 days</div>
+          <div class="dashboard-help">
+            <p>
+              Each cell is how often this extension redirected you away from a blocked site: rows are days of the week,
+              columns are hours of the day.
+            </p>
+            <p>
+              Stronger green = more redirects through that slot. Hover a square for the exact count. Useful for spotting when cravings cluster.
+            </p>
+          </div>
+          <canvas id="heatmap-canvas" width="337" height="99" aria-label="Craving heatmap last 30 days"></canvas>
+          <div id="heatmap-tooltip" role="tooltip" aria-live="polite"></div>
           <div class="line" id="heatmap-peak">peak: —</div>
           <div class="section">
             <button type="button" class="rand-link" id="heatmap-back">→ back</button>
@@ -549,13 +689,27 @@
         </div>
 
         <div id="view-queue" class="panel-hidden">
-          <div class="line"><span class="arrow">→</span> <span id="queue-header">due problems (0)</span></div>
+          <div class="line"><span class="arrow">→</span> SRS review queue · <span id="queue-header">due problems (0)</span></div>
+          <div class="dashboard-help">
+            <p>
+              Spaced repetition (SRS) decides when problems should come back based on solves vs “dodges” after redirects. Overdue slots show first; upcoming reviews list with their due dates.
+            </p>
+            <p>
+              Only meaningful in LeetCode mode with your username filled in—you need recent submission data so the scheduler can react.
+            </p>
+          </div>
           <div id="queue-list"></div>
           <div class="section">
             <button type="button" class="rand-link" id="queue-back">→ back</button>
           </div>
         </div>
       </div>
+    </div>
+
+    <div id="lc-help-tooltip-desc" class="lc-help-tip-floating panel-hidden" role="tooltip">
+      After you’re redirected to a problem, this extension waits, then asks LeetCode (in your logged-in browser session)
+      whether you got an accepted submission. Those results update the SRS review queue and mark attempts on your craving
+      timeline.
     </div>
 
     <script type="module" src="popup.js"></script>
