@@ -1,6 +1,13 @@
 import { pickNextProblem, noteRedirectForSrs, updateRecord } from "./srs.js";
 import { checkSolved } from "./graphql.js";
 import { logRedirect, updateSolveStatus } from "./behavior.js";
+import {
+  parseRedirectSettingsFromSync,
+  isAlreadyOnRedirectDestination,
+  REDIRECT_MODE_CUSTOM,
+  STORAGE_REDIRECT_MODE,
+  STORAGE_CUSTOM_REDIRECT_URL
+} from "./redirect-settings.js";
 
 const DEFAULT_BLACKLIST = [
   "reddit.com",
@@ -14,7 +21,9 @@ const DEFAULT_BLACKLIST = [
 
 const STORAGE_SYNC_KEYS = {
   blacklist: "blacklist",
-  enabled: "enabled"
+  enabled: "enabled",
+  redirectMode: STORAGE_REDIRECT_MODE,
+  customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL
 };
 
 const STORAGE_LOCAL_KEYS = {
@@ -77,58 +86,98 @@ function hostnameMatchesBlockedEntry(host, blocked) {
 async function getSettings() {
   const syncData = await chrome.storage.sync.get([
     STORAGE_SYNC_KEYS.blacklist,
-    STORAGE_SYNC_KEYS.enabled
+    STORAGE_SYNC_KEYS.enabled,
+    STORAGE_SYNC_KEYS.redirectMode,
+    STORAGE_SYNC_KEYS.customRedirectUrl
   ]);
+
+  const { redirectMode, customRedirectUrl } = parseRedirectSettingsFromSync(syncData);
 
   return {
     blacklist: Array.isArray(syncData.blacklist) ? syncData.blacklist : DEFAULT_BLACKLIST,
-    enabled: syncData.enabled !== false
+    enabled: syncData.enabled !== false,
+    redirectMode,
+    customRedirectUrl
   };
 }
 
 async function updateRules() {
-  const { blacklist, enabled } = await getSettings();
+  const {
+    blacklist,
+    enabled,
+    redirectMode,
+    customRedirectUrl
+  } = await getSettings();
+
   const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existingRules.map((rule) => rule.id);
 
-  if (!enabled || blacklist.length === 0) {
+  const customOk =
+    redirectMode === REDIRECT_MODE_CUSTOM &&
+    typeof customRedirectUrl === "string" &&
+    customRedirectUrl.length > 0;
+
+  if (!enabled || blacklist.length === 0 || (redirectMode === REDIRECT_MODE_CUSTOM && !customOk)) {
     await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
     return;
   }
 
-  const localData = await chrome.storage.local.get([STORAGE_LOCAL_KEYS.lastSlug]);
-  let chainExclude = localData.lastRedirectSlug || undefined;
-
   const addRules = [];
   let ruleId = 0;
 
-  for (let index = 0; index < blacklist.length; index++) {
-    const domain = canonicalizeDomain(blacklist[index]);
-    if (!domain) {
-      continue;
-    }
-
-    // eslint-disable-next-line no-await-in-loop
-    const selected = await pickNextProblem(chainExclude);
-    chainExclude = selected.slug;
-
-    ruleId += 1;
-    addRules.push({
-      id: ruleId,
-      priority: 1,
-      action: {
-        type: "redirect",
-        redirect: {
-          url: `https://leetcode.com/problems/${selected.slug}/`
-        }
-      },
-      condition: {
-        // requestDomains matches the host plus all subdomains; omits urlFilter so bare origins
-        // like https://ca.shein.com (no path) are still covered reliably.
-        requestDomains: [domain],
-        resourceTypes: ["main_frame"]
+  if (redirectMode === REDIRECT_MODE_CUSTOM) {
+    for (let index = 0; index < blacklist.length; index++) {
+      const domain = canonicalizeDomain(blacklist[index]);
+      if (!domain) {
+        continue;
       }
-    });
+
+      ruleId += 1;
+      addRules.push({
+        id: ruleId,
+        priority: 1,
+        action: {
+          type: "redirect",
+          redirect: {
+            url: customRedirectUrl
+          }
+        },
+        condition: {
+          requestDomains: [domain],
+          resourceTypes: ["main_frame"]
+        }
+      });
+    }
+  } else {
+    const localData = await chrome.storage.local.get([STORAGE_LOCAL_KEYS.lastSlug]);
+    let chainExclude = localData.lastRedirectSlug || undefined;
+
+    for (let index = 0; index < blacklist.length; index++) {
+      const domain = canonicalizeDomain(blacklist[index]);
+      if (!domain) {
+        continue;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const selected = await pickNextProblem(chainExclude);
+      chainExclude = selected.slug;
+
+      ruleId += 1;
+      addRules.push({
+        id: ruleId,
+        priority: 1,
+        action: {
+          type: "redirect",
+          redirect: {
+            url: `https://leetcode.com/problems/${selected.slug}/`
+          }
+        },
+        condition: {
+          requestDomains: [domain],
+          resourceTypes: ["main_frame"]
+        }
+      });
+    }
   }
 
   try {
@@ -184,7 +233,7 @@ async function initializeDefaults() {
   }
 }
 
-async function redirectTabIfStillOnBlockedSite(tabId, blacklist, selected) {
+async function redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, destinationUrl) {
   await new Promise((r) => setTimeout(r, 75));
 
   let tab;
@@ -206,7 +255,7 @@ async function redirectTabIfStillOnBlockedSite(tabId, blacklist, selected) {
     return;
   }
 
-  if (current.startsWith("https://leetcode.com/problems/")) {
+  if (isAlreadyOnRedirectDestination(current, redirectSettings)) {
     return;
   }
 
@@ -215,16 +264,17 @@ async function redirectTabIfStillOnBlockedSite(tabId, blacklist, selected) {
     return;
   }
 
-  const dest = `https://leetcode.com/problems/${selected.slug}/`;
   try {
-    await chrome.tabs.update(tabId, { url: dest });
+    await chrome.tabs.update(tabId, { url: destinationUrl });
   } catch {
     // Ignore (e.g. missing permission for privileged tabs).
   }
 }
 
 async function trackRedirectAttempt(tabId, url) {
-  const { blacklist, enabled } = await getSettings();
+  const redirectSettings = await getSettings();
+  const { blacklist, enabled, redirectMode, customRedirectUrl } = redirectSettings;
+
   if (!enabled) {
     return;
   }
@@ -241,6 +291,56 @@ async function trackRedirectAttempt(tabId, url) {
     return;
   }
 
+  if (redirectMode === REDIRECT_MODE_CUSTOM) {
+    if (!customRedirectUrl) {
+      return;
+    }
+
+    const localLite = await chrome.storage.local.get([
+      STORAGE_LOCAL_KEYS.todayCount,
+      STORAGE_LOCAL_KEYS.todayDate,
+      STORAGE_LOCAL_KEYS.streak,
+      STORAGE_LOCAL_KEYS.lastRedirectDay
+    ]);
+
+    await redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, customRedirectUrl);
+
+    const redirectedAt = Date.now();
+    const today = getTodayISO();
+    const previousDate = localLite.redirectsDate;
+    const todayCount = previousDate === today ? (localLite.redirectsToday || 0) + 1 : 1;
+
+    let streak = localLite.redirectStreak || 0;
+    const lastRedirectDay = localLite.lastRedirectDay;
+
+    if (lastRedirectDay !== today) {
+      if (!lastRedirectDay) {
+        streak = 1;
+      } else {
+        const lastDate = new Date(lastRedirectDay);
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        streak =
+          lastDate.toISOString().split("T")[0] === yesterday.toISOString().split("T")[0] ? streak + 1 : 1;
+      }
+    }
+
+    const site = extractSiteHostname(url);
+
+    await chrome.storage.local.set({
+      redirectsToday: todayCount,
+      redirectsDate: today,
+      lastRedirectSlug: "__custom__",
+      lastRedirectDifficulty: "n/a",
+      redirectStreak: streak,
+      lastRedirectDay: today
+    });
+
+    await logRedirect({ timestamp: redirectedAt, site, slug: "__custom__" });
+    await updateRules();
+    return;
+  }
+
   const localData = await chrome.storage.local.get([
     STORAGE_LOCAL_KEYS.lastSlug,
     STORAGE_LOCAL_KEYS.todayCount,
@@ -251,7 +351,8 @@ async function trackRedirectAttempt(tabId, url) {
   ]);
 
   const selected = await pickNextProblem();
-  await redirectTabIfStillOnBlockedSite(tabId, blacklist, selected);
+  const destinationUrl = `https://leetcode.com/problems/${selected.slug}/`;
+  await redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, destinationUrl);
 
   const redirectedAt = Date.now();
   const today = getTodayISO();
@@ -313,7 +414,12 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
   if (areaName !== "sync") {
     return;
   }
-  if (changes.blacklist || changes.enabled) {
+  if (
+    changes.blacklist ||
+    changes.enabled ||
+    changes.redirectMode ||
+    changes.customRedirectUrl
+  ) {
     await updateRules();
   }
 });
@@ -332,7 +438,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   delete pendingMap[alarm.name];
   await chrome.storage.local.set({ pendingChecks: pendingMap });
 
-  if (!payload || typeof payload.slug !== "string" || typeof payload.redirectedAt !== "number") {
+  if (
+    !payload ||
+    typeof payload.slug !== "string" ||
+    payload.slug === "__custom__" ||
+    typeof payload.redirectedAt !== "number"
+  ) {
     return;
   }
 
@@ -349,6 +460,20 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
   await updateSolveStatus(payload.slug, payload.redirectedAt, outcome.solved);
   await updateRecord(payload.slug, outcome.quality);
+});
+
+chrome.action.onClicked.addListener(async () => {
+  const pageUrl = chrome.runtime.getURL("popup.html");
+  const existing = await chrome.tabs.query({ url: pageUrl });
+  if (existing.length > 0) {
+    const tab = existing[0];
+    if (typeof tab.id === "number" && typeof tab.windowId === "number") {
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
+    return;
+  }
+  await chrome.tabs.create({ url: pageUrl });
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
@@ -371,7 +496,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     }
   }
 
-  if (!candidateUrl || candidateUrl.startsWith("https://leetcode.com/problems/")) {
+  const settings = await getSettings();
+  if (!candidateUrl || isAlreadyOnRedirectDestination(candidateUrl, settings)) {
     return;
   }
 

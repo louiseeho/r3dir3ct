@@ -31,18 +31,33 @@
         font-family: "JetBrains Mono", "Fira Code", monospace;
       }
 
+      html {
+        min-height: 100%;
+      }
+
       body {
         margin: 0;
-        width: 340px;
-        min-height: 330px;
-        max-height: 420px;
+        min-height: 100vh;
         color: var(--cmd);
-        background: var(--bg);
+        background: radial-gradient(ellipse 120% 80% at 50% -20%, #1f2836 0%, var(--bg) 55%);
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        padding: 28px 20px 40px;
       }
 
       .app {
+        width: 100%;
+        max-width: 720px;
+        min-height: min(620px, calc(100vh - 56px));
         border: 1px solid var(--border);
+        border-radius: 10px;
         background: var(--bg);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.03),
+          0 24px 48px rgba(0, 0, 0, 0.45);
+        display: flex;
+        flex-direction: column;
       }
 
       .titlebar {
@@ -50,9 +65,11 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        min-height: 30px;
+        flex-shrink: 0;
+        min-height: 40px;
         background: var(--surface);
         border-bottom: 1px solid var(--border);
+        border-radius: 10px 10px 0 0;
       }
 
       .dots {
@@ -93,17 +110,28 @@
 
       .title {
         color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 0.02em;
+      }
+
+      .subtitle {
+        color: var(--muted);
         font-size: 11px;
+        opacity: 0.85;
+        margin-top: 2px;
       }
 
       .content {
-        padding: 12px;
+        padding: 20px 24px 24px;
+        flex: 1;
+        overflow-y: auto;
       }
 
       .line {
-        margin: 4px 0;
+        margin: 6px 0;
         color: var(--muted);
-        line-height: 1.45;
+        line-height: 1.5;
+        font-size: 13px;
       }
 
       .line .arrow,
@@ -136,7 +164,7 @@
       }
 
       .section {
-        margin-top: 12px;
+        margin-top: 18px;
       }
 
       #sites-list {
@@ -175,13 +203,25 @@
         padding: 6px 0 0 12px;
       }
 
-      #site-input {
+      .input-with-caret {
+        position: relative;
         flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+      }
+
+      .input-with-caret > input {
+        width: 100%;
+        min-width: 0;
+      }
+
+      #site-input {
         border: 0;
         outline: none;
         background: transparent;
         color: var(--cmd);
-        font-size: 12px;
+        font-size: 13px;
         caret-color: transparent;
       }
 
@@ -190,13 +230,26 @@
       }
 
       .fake-caret {
-        width: 7px;
-        height: 14px;
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 1;
+        width: 8px;
+        height: 16px;
+        margin: 0;
+        padding: 0;
         background: var(--cmd);
-        animation: blink 1s step-end infinite;
+        pointer-events: none;
+        animation: caret-blink 1s step-end infinite;
       }
 
-      @keyframes blink {
+      .fake-caret.fake-caret--away {
+        animation: none;
+        opacity: 0;
+      }
+
+      @keyframes caret-blink {
         50% {
           opacity: 0;
         }
@@ -215,14 +268,14 @@
       }
 
       .bottom-nav {
-        margin-top: 10px;
+        margin-top: 16px;
         border-top: 1px solid var(--border);
-        padding-top: 8px;
+        padding-top: 12px;
         display: flex;
         flex-wrap: wrap;
         justify-content: space-between;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
         color: var(--muted);
       }
 
@@ -243,14 +296,15 @@
 
       #heatmap-canvas {
         display: block;
-        margin-top: 8px;
+        margin-top: 12px;
         cursor: default;
       }
 
       .queue-row {
-        padding: 6px 0 6px 12px;
+        padding: 8px 0 8px 12px;
         color: var(--muted);
         line-height: 1.45;
+        font-size: 13px;
       }
 
       .muted-inline {
@@ -287,7 +341,21 @@
 
       .lc-saved-line {
         color: var(--accent);
-        font-size: 11px;
+        font-size: 12px;
+      }
+
+      #lc-username-input {
+        flex: 1;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: var(--cmd);
+        font-size: 13px;
+        caret-color: transparent;
+      }
+
+      #lc-username-input::placeholder {
+        color: var(--muted);
       }
 
       .rand-link {
@@ -296,10 +364,61 @@
         color: var(--muted);
         cursor: pointer;
         padding: 0;
+        font-size: inherit;
       }
 
       .rand-link:hover {
         color: var(--accent);
+      }
+
+      .select-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 0 0 12px;
+      }
+
+      .dash-select {
+        flex: 1;
+        max-width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 8px;
+        background: var(--surface);
+        color: var(--cmd);
+        font-size: 12px;
+        cursor: pointer;
+        outline: none;
+      }
+
+      .dash-select:focus {
+        border-color: var(--accent);
+      }
+
+      .hint-line {
+        font-size: 11px;
+        margin-top: 6px;
+        padding-left: 12px;
+      }
+
+      #custom-url-input {
+        flex: 1;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: var(--cmd);
+        font-size: 13px;
+        caret-color: transparent;
+      }
+
+      #custom-url-input::placeholder {
+        color: var(--muted);
+      }
+
+      .url-feedback {
+        padding-left: 12px;
+        margin-top: 4px;
+        font-size: 11px;
       }
     </style>
   </head>
@@ -313,7 +432,10 @@
         </div>
         <div class="titlebar-brand">
           <img class="app-logo" src="icon.svg" alt="" width="22" height="22" />
-          <span class="title">r3dir3ct</span>
+          <div>
+            <div class="title">r3dir3ct</div>
+            <div class="subtitle">extension dashboard</div>
+          </div>
         </div>
       </div>
 
@@ -326,11 +448,15 @@
           blocking <span class="val" id="blocked-count">0</span> sites ·
           <span class="val" id="redirects-today">0</span> redirects today
         </div>
-        <div class="line">
+        <div class="line leetcode-only">
           last redirect <span class="arrow">→</span>
           <span class="warn" id="last-slug">none</span>
         </div>
-        <div class="line">
+        <div class="line custom-only panel-hidden">
+          opens <span class="arrow">→</span>
+          <span class="val" id="custom-target-display">—</span>
+        </div>
+        <div class="line leetcode-only">
           difficulty <span class="arrow">→</span>
           <span id="last-difficulty" class="val">n/a</span>
         </div>
@@ -342,8 +468,10 @@
           <div id="sites-list"></div>
           <div class="input-row">
             <span class="dollar">$</span>
-            <input id="site-input" type="text" placeholder="add domain..." />
-            <span class="fake-caret" aria-hidden="true"></span>
+            <div class="input-with-caret">
+              <input id="site-input" type="text" placeholder="add domain..." />
+              <span class="fake-caret" aria-hidden="true"></span>
+            </div>
           </div>
         </div>
 
@@ -356,13 +484,46 @@
 
         <div class="section">
           <div class="line">
+            <span class="arrow">→</span> <span class="cmd">redirect target</span>
+          </div>
+          <div class="select-row">
+            <select id="redirect-mode-select" class="dash-select" aria-label="Redirect target mode">
+              <option value="leetcode">leetcode (random problems, SRS)</option>
+              <option value="custom">custom https url</option>
+            </select>
+          </div>
+          <div id="custom-url-panel" class="panel-hidden">
+            <div class="input-row">
+              <span class="dollar">$</span>
+              <div class="input-with-caret">
+                <input
+                  id="custom-url-input"
+                  type="text"
+                  inputmode="url"
+                  autocomplete="off"
+                  placeholder="https://…"
+                />
+                <span class="fake-caret" aria-hidden="true"></span>
+              </div>
+            </div>
+            <div id="custom-url-feedback" class="line url-feedback panel-hidden" role="status"></div>
+            <p id="custom-url-missing" class="line hint-line panel-hidden">
+              saves as you leave the field. without a url, redirects won’t activate.
+            </p>
+          </div>
+        </div>
+
+        <div class="section leetcode-only">
+          <div class="line">
             <span class="arrow">→</span> <span class="cmd">leetcode user</span>
           </div>
           <div class="line lc-saved-line panel-hidden" id="lc-saved">→ saved ✓</div>
           <div class="input-row">
             <span class="dollar">$</span>
-            <input id="lc-username-input" type="text" autocomplete="off" placeholder="username..." />
-            <span class="fake-caret" aria-hidden="true"></span>
+            <div class="input-with-caret">
+              <input id="lc-username-input" type="text" autocomplete="off" placeholder="username..." />
+              <span class="fake-caret" aria-hidden="true"></span>
+            </div>
           </div>
         </div>
 
@@ -370,17 +531,17 @@
           <span>streak: <span class="val" id="streak-days">0d</span></span>
           <span class="bottom-tabs">
             <button type="button" class="rand-link" id="tab-heatmap">[→ heatmap]</button>
-            <button type="button" class="rand-link" id="tab-queue">[→ queue]</button>
+            <button type="button" class="rand-link leetcode-only" id="tab-queue">[→ queue]</button>
           </span>
         </div>
-        <div class="bottom-rand">
+        <div class="bottom-rand leetcode-only">
           <button type="button" class="rand-link" id="random-link">→ random problem ↗</button>
         </div>
         </div>
 
         <div id="view-heatmap" class="panel-hidden">
           <div class="line"><span class="arrow">→</span> craving heatmap (last 30d)</div>
-          <canvas id="heatmap-canvas" width="260" height="90"></canvas>
+          <canvas id="heatmap-canvas" width="264" height="90" aria-label="Craving heatmap last 30 days"></canvas>
           <div class="line" id="heatmap-peak">peak: —</div>
           <div class="section">
             <button type="button" class="rand-link" id="heatmap-back">→ back</button>

@@ -2,11 +2,23 @@ import { pickNextProblem, getSrsPayload } from "./srs.js";
 import { getHeatmapData } from "./behavior.js";
 import { renderHeatmap, formatPeakLine } from "./heatmap.js";
 import { problems } from "./problems.js";
+import {
+  REDIRECT_MODE_LEETCODE,
+  REDIRECT_MODE_CUSTOM,
+  normalizeHttpsUrl,
+  describeCustomTargetShort,
+  parseRedirectSettingsFromSync,
+  STORAGE_REDIRECT_MODE,
+  STORAGE_CUSTOM_REDIRECT_URL
+} from "./redirect-settings.js";
+import { attachFollowingCaret, syncAllFollowingCarets } from "./caret-follow.js";
 
 const SYNC_KEYS = {
   blacklist: "blacklist",
   enabled: "enabled",
-  lcUsername: "lcUsername"
+  lcUsername: "lcUsername",
+  redirectMode: STORAGE_REDIRECT_MODE,
+  customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL
 };
 
 const LOCAL_KEYS = {
@@ -44,9 +56,18 @@ const queueHeaderEl = document.getElementById("queue-header");
 const lcInputEl = document.getElementById("lc-username-input");
 const lcSavedEl = document.getElementById("lc-saved");
 
+const redirectModeSelectEl = document.getElementById("redirect-mode-select");
+const customUrlPanelEl = document.getElementById("custom-url-panel");
+const customUrlInputEl = document.getElementById("custom-url-input");
+const customUrlFeedbackEl = document.getElementById("custom-url-feedback");
+const customTargetDisplayEl = document.getElementById("custom-target-display");
+const customUrlMissingHintEl = document.getElementById("custom-url-missing");
+
 /** @type {"main" | "heatmap" | "queue"} */
 let activeView = "main";
 let lcSavedTimer = null;
+/** @type {boolean} */
+let customUrlInputFocused = false;
 
 function getTodayISO() {
   return new Date().toISOString().split("T")[0];
@@ -73,6 +94,10 @@ function renderDifficulty(value) {
 }
 
 function showView(which) {
+  if (which === "queue" && redirectModeSelectEl?.value === REDIRECT_MODE_CUSTOM) {
+    which = "main";
+  }
+
   activeView = which;
   const showMain = which === "main";
   const showHeat = which === "heatmap";
@@ -82,9 +107,92 @@ function showView(which) {
   viewQueueEl.classList.toggle("panel-hidden", !showQ);
 }
 
+function applyRedirectModeUi(mode, customHref, rawCustomInput) {
+  const lcMode = mode === REDIRECT_MODE_LEETCODE;
+
+  document.querySelectorAll(".leetcode-only").forEach((el) => {
+    el.classList.toggle("panel-hidden", !lcMode);
+  });
+
+  document.querySelectorAll(".custom-only").forEach((el) => {
+    el.classList.toggle("panel-hidden", lcMode);
+  });
+
+  redirectModeSelectEl.value = lcMode ? REDIRECT_MODE_LEETCODE : REDIRECT_MODE_CUSTOM;
+
+  customUrlPanelEl.classList.toggle("panel-hidden", lcMode);
+  hideCustomUrlFeedback();
+
+  customTargetDisplayEl.textContent =
+    lcMode ? "—" : describeCustomTargetShort(customHref || rawCustomInput || "");
+
+  const missingCustomSaved = Boolean(
+    mode === REDIRECT_MODE_CUSTOM &&
+      !(typeof customHref === "string" && customHref.length > 0)
+  );
+  customUrlMissingHintEl?.classList.toggle("panel-hidden", !missingCustomSaved);
+
+  if (!customUrlInputFocused) {
+    const raw =
+      typeof rawCustomInput === "string" ? rawCustomInput : customHref ? String(customHref) : "";
+    customUrlInputEl.value = lcMode ? "" : raw;
+  }
+}
+
+function hideCustomUrlFeedback() {
+  customUrlFeedbackEl.textContent = "";
+  customUrlFeedbackEl.classList.add("panel-hidden");
+  customUrlFeedbackEl.classList.remove("warn");
+}
+
+async function persistCustomRedirectUrl() {
+  if (redirectModeSelectEl.value !== REDIRECT_MODE_CUSTOM) {
+    hideCustomUrlFeedback();
+    return;
+  }
+
+  const trimmed = customUrlInputEl.value.trim();
+
+  if (!trimmed) {
+    hideCustomUrlFeedback();
+    await chrome.storage.sync.set({ [STORAGE_CUSTOM_REDIRECT_URL]: "" });
+    await renderMain();
+    return;
+  }
+
+  const normalized = normalizeHttpsUrl(trimmed);
+
+  if (!normalized) {
+    customUrlFeedbackEl.textContent = "enter a valid https url";
+    customUrlFeedbackEl.classList.remove("panel-hidden");
+    customUrlFeedbackEl.classList.add("warn");
+    return;
+  }
+
+  hideCustomUrlFeedback();
+  await chrome.storage.sync.set({ [STORAGE_CUSTOM_REDIRECT_URL]: normalized });
+  await renderMain();
+}
+
+async function clearLeetCodeSolvePipeline() {
+  const all = await chrome.alarms.getAll();
+  for (const alarm of all) {
+    if (alarm.name.startsWith("checkSolve__")) {
+      await chrome.alarms.clear(alarm.name);
+    }
+  }
+  await chrome.storage.local.set({ pendingChecks: {} });
+}
+
 async function fetchState() {
   const [syncData, localData] = await Promise.all([
-    chrome.storage.sync.get([SYNC_KEYS.blacklist, SYNC_KEYS.enabled, SYNC_KEYS.lcUsername]),
+    chrome.storage.sync.get([
+      SYNC_KEYS.blacklist,
+      SYNC_KEYS.enabled,
+      SYNC_KEYS.lcUsername,
+      SYNC_KEYS.redirectMode,
+      SYNC_KEYS.customRedirectUrl
+    ]),
     chrome.storage.local.get([
       LOCAL_KEYS.lastSlug,
       LOCAL_KEYS.lastDifficulty,
@@ -94,19 +202,37 @@ async function fetchState() {
     ])
   ]);
 
+  const { redirectMode, customRedirectUrl } = parseRedirectSettingsFromSync(syncData);
+  const rawCustomUrlStored =
+    typeof syncData.customRedirectUrl === "string" ? syncData.customRedirectUrl : "";
+
   const blacklist = Array.isArray(syncData.blacklist) ? syncData.blacklist : [];
   const enabled = syncData.enabled !== false;
   const today = getTodayISO();
   const redirectsToday = localData.redirectsDate === today ? localData.redirectsToday || 0 : 0;
 
+  const lastSlugRaw = localData.lastRedirectSlug || "";
+
+  let lastSlugUi = "none";
+  if (
+    redirectMode === REDIRECT_MODE_LEETCODE &&
+    lastSlugRaw &&
+    lastSlugRaw !== "__custom__"
+  ) {
+    lastSlugUi = lastSlugRaw;
+  }
+
   return {
     blacklist,
     enabled,
     lcUsername: typeof syncData.lcUsername === "string" ? syncData.lcUsername : "",
-    lastSlug: localData.lastRedirectSlug || "none",
+    lastSlug: lastSlugUi,
     lastDifficulty: localData.lastRedirectDifficulty || "n/a",
     redirectsToday,
-    streak: localData.redirectStreak || 0
+    streak: localData.redirectStreak || 0,
+    redirectMode,
+    customRedirectUrl,
+    rawCustomUrlStored
   };
 }
 
@@ -148,17 +274,28 @@ function renderToggle(enabled) {
 async function renderMain() {
   const state = await fetchState();
 
+  applyRedirectModeUi(state.redirectMode, state.customRedirectUrl, state.rawCustomUrlStored);
+
+  if (activeView === "queue" && state.redirectMode === REDIRECT_MODE_CUSTOM) {
+    showView("main");
+  }
+
   blockedCountEl.textContent = String(state.blacklist.length);
   redirectsTodayEl.textContent = String(state.redirectsToday);
+
   lastSlugEl.textContent = state.lastSlug;
   streakDaysEl.textContent = `${state.streak}d`;
   if (document.activeElement !== lcInputEl) {
     lcInputEl.value = state.lcUsername;
   }
 
-  renderDifficulty(state.lastDifficulty);
+  if (state.redirectMode === REDIRECT_MODE_LEETCODE) {
+    renderDifficulty(state.lastDifficulty);
+  }
+
   renderSites(state.blacklist);
   renderToggle(state.enabled);
+  syncAllFollowingCarets();
 }
 
 async function renderHeatmapPanel() {
@@ -267,8 +404,45 @@ siteInputEl.addEventListener("keydown", async (event) => {
 });
 
 randomLinkEl.addEventListener("click", async () => {
+  const syncData = await chrome.storage.sync.get([SYNC_KEYS.redirectMode]);
+  if (syncData.redirectMode === REDIRECT_MODE_CUSTOM) {
+    return;
+  }
   const selected = await pickNextProblem();
   await chrome.tabs.create({ url: `https://leetcode.com/problems/${selected.slug}/` });
+});
+
+redirectModeSelectEl.addEventListener("change", async () => {
+  const beforeRaw = await chrome.storage.sync.get([SYNC_KEYS.redirectMode]);
+  const before =
+    beforeRaw.redirectMode === REDIRECT_MODE_CUSTOM ? REDIRECT_MODE_CUSTOM : REDIRECT_MODE_LEETCODE;
+  const next =
+    redirectModeSelectEl.value === REDIRECT_MODE_CUSTOM ? REDIRECT_MODE_CUSTOM : REDIRECT_MODE_LEETCODE;
+
+  if (next === REDIRECT_MODE_CUSTOM && before === REDIRECT_MODE_LEETCODE) {
+    await clearLeetCodeSolvePipeline();
+  }
+
+  await chrome.storage.sync.set({ [STORAGE_REDIRECT_MODE]: next });
+  hideCustomUrlFeedback();
+  await renderMain();
+});
+
+customUrlInputEl.addEventListener("focus", () => {
+  customUrlInputFocused = true;
+});
+
+customUrlInputEl.addEventListener("blur", async () => {
+  customUrlInputFocused = false;
+  await persistCustomRedirectUrl();
+});
+
+customUrlInputEl.addEventListener("keydown", async (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  await persistCustomRedirectUrl();
 });
 
 tabHeatmapBtn.addEventListener("click", async () => {
@@ -313,6 +487,8 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     changes.blacklist ||
     changes.enabled ||
     changes.lcUsername ||
+    changes.redirectMode ||
+    changes.customRedirectUrl ||
     changes.lastRedirectSlug ||
     changes.lastRedirectDifficulty ||
     changes.redirectsToday ||
@@ -327,6 +503,17 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
 
   await refreshActiveView();
 });
+
+for (const el of [siteInputEl, customUrlInputEl, lcInputEl]) {
+  const caret =
+    el.nextElementSibling instanceof HTMLElement &&
+    el.nextElementSibling.classList.contains("fake-caret")
+      ? el.nextElementSibling
+      : null;
+  if (caret) {
+    attachFollowingCaret(el, caret);
+  }
+}
 
 renderMain();
 showView("main");
