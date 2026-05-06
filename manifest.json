@@ -3,7 +3,7 @@
   "minimum_chrome_version": "101",
   "name": "r3dir3ct",
   "version": "1.0.0",
-  "description": "r3dir3ct blocks distracting websites and redirects you to a random problem instead.",
+  "description": "Block distracting websites and redirect to a random programming problem instead (or any other website).",
   "permissions": [
     "declarativeNetRequest",
     "declarativeNetRequestFeedback",

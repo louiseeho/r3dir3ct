@@ -6,8 +6,11 @@ import {
   parseRedirectSettingsFromSync,
   isAlreadyOnRedirectDestination,
   REDIRECT_MODE_CUSTOM,
+  SITE_LIST_MODE_WHITELIST,
+  SITE_LIST_MODE_BLACKLIST,
   STORAGE_REDIRECT_MODE,
-  STORAGE_CUSTOM_REDIRECT_URL
+  STORAGE_CUSTOM_REDIRECT_URL,
+  STORAGE_SITE_LIST_MODE
 } from "./redirect-settings.js";
 import { messages as shameMessages } from "./messages.js";
 
@@ -22,9 +25,11 @@ const DEFAULT_BLACKLIST = [
 ];
 
 const STORAGE_SYNC_KEYS = {
-  blacklist: "blacklist",
+  blockedDomains: "blockedDomains",
+  allowedDomains: "allowedDomains",
   enabled: "enabled",
   lcUsername: "lcUsername",
+  siteListMode: STORAGE_SITE_LIST_MODE,
   redirectMode: STORAGE_REDIRECT_MODE,
   customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL,
   shameLevel: "shameLevel"
@@ -262,13 +267,13 @@ async function syncSolvedHistoryIfPossible() {
 }
 
 /**
- * Drops pending rows whose domain is not on the blacklist (canonical match).
- * @param {string[]} blacklist
+ * Drops pending rows whose domain is not on the blocked list (canonical match).
+ * @param {string[]} blockedDomains
  * @param {Array<{ domain: string, queuedAt: number, executeAfter: number }>} pending
  */
-function filterOrphanPendingRemovals(blacklist, pending) {
+function filterOrphanPendingRemovals(blockedDomains, pending) {
   return pending.filter((row) =>
-    blacklist.some((b) => canonicalizeDomain(b) === canonicalizeDomain(row.domain))
+    blockedDomains.some((b) => canonicalizeDomain(b) === canonicalizeDomain(row.domain))
   );
 }
 
@@ -288,10 +293,15 @@ async function executeReadyPendingRemovalsCore() {
   const gateOpen = problemGateOpenToday(localRaw[STORAGE_LOCAL_KEYS.problemGate]);
   let pending = Array.isArray(localRaw.pendingRemovals) ? [...localRaw.pendingRemovals] : [];
 
-  const syncRaw = await chrome.storage.sync.get([STORAGE_SYNC_KEYS.blacklist]);
-  let blacklist = Array.isArray(syncRaw.blacklist) ? [...syncRaw.blacklist] : [];
+  const syncRaw = await chrome.storage.sync.get([STORAGE_SYNC_KEYS.blockedDomains, STORAGE_SYNC_KEYS.siteListMode]);
+  if (syncRaw.siteListMode === SITE_LIST_MODE_WHITELIST) {
+    // In whitelist mode we never "queue removals"; keep pending untouched.
+    await chrome.storage.local.set({ [STORAGE_LOCAL_KEYS.pendingRemovals]: pending });
+    return;
+  }
 
-  pending = filterOrphanPendingRemovals(blacklist, pending);
+  let blockedDomains = Array.isArray(syncRaw.blockedDomains) ? [...syncRaw.blockedDomains] : [];
+  pending = filterOrphanPendingRemovals(blockedDomains, pending);
 
   const now = Date.now();
   if (!gateOpen) {
@@ -308,10 +318,10 @@ async function executeReadyPendingRemovalsCore() {
     return;
   }
 
-  blacklist = blacklist.filter((b) => !domainsToRemove.has(canonicalizeDomain(b)));
+  blockedDomains = blockedDomains.filter((b) => !domainsToRemove.has(canonicalizeDomain(b)));
   pending = pending.filter((pr) => !domainsToRemove.has(canonicalizeDomain(pr.domain)));
 
-  await chrome.storage.sync.set({ [STORAGE_SYNC_KEYS.blacklist]: blacklist });
+  await chrome.storage.sync.set({ [STORAGE_SYNC_KEYS.blockedDomains]: blockedDomains });
   await chrome.storage.local.set({ [STORAGE_LOCAL_KEYS.pendingRemovals]: pending });
   await updateRules();
 }
@@ -350,19 +360,57 @@ function hostnameMatchesBlockedEntry(host, blocked) {
   return h === b || h.endsWith(`.${b}`);
 }
 
+function resolveAllowedHosts(settings) {
+  const hosts = new Set();
+  hosts.add("leetcode.com");
+  hosts.add("www.leetcode.com");
+  if (settings.redirectMode === REDIRECT_MODE_CUSTOM && settings.customRedirectUrl) {
+    try {
+      const u = new URL(settings.customRedirectUrl);
+      hosts.add(u.hostname.toLowerCase());
+    } catch {
+      // ignore malformed custom URL here; other checks handle it
+    }
+  }
+  return hosts;
+}
+
+function shouldBlockHostname(hostname, settings) {
+  const h = String(hostname || "").toLowerCase();
+  if (!h) {
+    return false;
+  }
+  const blockedDomains = Array.isArray(settings.blockedDomains) ? settings.blockedDomains : [];
+  const allowedDomains = Array.isArray(settings.allowedDomains) ? settings.allowedDomains : [];
+  if (settings.siteListMode === SITE_LIST_MODE_WHITELIST) {
+    const allowedHosts = resolveAllowedHosts(settings);
+    if (Array.from(allowedHosts).some((allowed) => hostnameMatchesBlockedEntry(h, allowed))) {
+      return false;
+    }
+    return !allowedDomains.some((allowed) => hostnameMatchesBlockedEntry(h, allowed));
+  }
+  return blockedDomains.some((blocked) => hostnameMatchesBlockedEntry(h, blocked));
+}
+
 async function getSettings() {
   const syncData = await chrome.storage.sync.get([
-    STORAGE_SYNC_KEYS.blacklist,
+    STORAGE_SYNC_KEYS.blockedDomains,
+    STORAGE_SYNC_KEYS.allowedDomains,
     STORAGE_SYNC_KEYS.enabled,
     STORAGE_SYNC_KEYS.redirectMode,
-    STORAGE_SYNC_KEYS.customRedirectUrl
+    STORAGE_SYNC_KEYS.customRedirectUrl,
+    STORAGE_SYNC_KEYS.siteListMode
   ]);
 
-  const { redirectMode, customRedirectUrl } = parseRedirectSettingsFromSync(syncData);
+  const { redirectMode, customRedirectUrl, siteListMode, blockedDomains, allowedDomains } = parseRedirectSettingsFromSync(
+    syncData
+  );
 
   return {
-    blacklist: Array.isArray(syncData.blacklist) ? syncData.blacklist : DEFAULT_BLACKLIST,
     enabled: syncData.enabled !== false,
+    siteListMode,
+    blockedDomains: Array.isArray(blockedDomains) && blockedDomains.length > 0 ? blockedDomains : DEFAULT_BLACKLIST,
+    allowedDomains: Array.isArray(allowedDomains) ? allowedDomains : [],
     redirectMode,
     customRedirectUrl
   };
@@ -370,8 +418,10 @@ async function getSettings() {
 
 async function updateRules() {
   const {
-    blacklist,
+    blockedDomains,
+    allowedDomains,
     enabled,
+    siteListMode,
     redirectMode,
     customRedirectUrl
   } = await getSettings();
@@ -384,7 +434,7 @@ async function updateRules() {
     typeof customRedirectUrl === "string" &&
     customRedirectUrl.length > 0;
 
-  if (!enabled || blacklist.length === 0 || (redirectMode === REDIRECT_MODE_CUSTOM && !customOk)) {
+  if (!enabled || (redirectMode === REDIRECT_MODE_CUSTOM && !customOk)) {
     await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
     return;
   }
@@ -392,9 +442,44 @@ async function updateRules() {
   const addRules = [];
   let ruleId = 0;
 
-  if (redirectMode === REDIRECT_MODE_CUSTOM) {
-    for (let index = 0; index < blacklist.length; index++) {
-      const domain = canonicalizeDomain(blacklist[index]);
+  if (siteListMode === SITE_LIST_MODE_WHITELIST) {
+    let redirectUrl = "";
+    if (redirectMode === REDIRECT_MODE_CUSTOM) {
+      redirectUrl = customRedirectUrl;
+    } else {
+      const selected = await pickNextProblem();
+      redirectUrl = leetcodeProblemUrl(selected.slug);
+    }
+
+    const excludedRequestDomains = Array.from(
+      new Set([
+        ...allowedDomains.map((d) => canonicalizeDomain(d)).filter(Boolean),
+        ...Array.from(resolveAllowedHosts({ redirectMode, customRedirectUrl })).map((d) => canonicalizeDomain(d))
+      ])
+    ).filter(Boolean);
+
+    addRules.push({
+      id: 1,
+      priority: 1,
+      action: {
+        type: "redirect",
+        redirect: {
+          url: redirectUrl
+        }
+      },
+      condition: {
+        regexFilter: "^https?://.+",
+        excludedRequestDomains,
+        resourceTypes: ["main_frame"]
+      }
+    });
+  } else if (redirectMode === REDIRECT_MODE_CUSTOM) {
+    if (blockedDomains.length === 0) {
+      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
+      return;
+    }
+    for (let index = 0; index < blockedDomains.length; index++) {
+      const domain = canonicalizeDomain(blockedDomains[index]);
       if (!domain) {
         continue;
       }
@@ -416,11 +501,15 @@ async function updateRules() {
       });
     }
   } else {
+    if (blockedDomains.length === 0) {
+      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
+      return;
+    }
     const localData = await chrome.storage.local.get([STORAGE_LOCAL_KEYS.lastSlug]);
     let chainExclude = localData.lastRedirectSlug || undefined;
 
-    for (let index = 0; index < blacklist.length; index++) {
-      const domain = canonicalizeDomain(blacklist[index]);
+    for (let index = 0; index < blockedDomains.length; index++) {
+      const domain = canonicalizeDomain(blockedDomains[index]);
       if (!domain) {
         continue;
       }
@@ -459,17 +548,35 @@ async function updateRules() {
 
 async function initializeDefaults() {
   const syncData = await chrome.storage.sync.get([
-    STORAGE_SYNC_KEYS.blacklist,
+    // legacy key (pre whitelist support)
+    "blacklist",
+    STORAGE_SYNC_KEYS.blockedDomains,
+    STORAGE_SYNC_KEYS.allowedDomains,
     STORAGE_SYNC_KEYS.enabled,
+    STORAGE_SYNC_KEYS.siteListMode,
     STORAGE_SYNC_KEYS.shameLevel
   ]);
 
   const syncPatch = {};
-  if (!Array.isArray(syncData.blacklist) || syncData.blacklist.length === 0) {
-    syncPatch.blacklist = DEFAULT_BLACKLIST;
+  const legacyBlacklist = Array.isArray(syncData.blacklist) ? syncData.blacklist : [];
+  if (!Array.isArray(syncData[STORAGE_SYNC_KEYS.blockedDomains]) || syncData[STORAGE_SYNC_KEYS.blockedDomains].length === 0) {
+    if (legacyBlacklist.length > 0) {
+      syncPatch[STORAGE_SYNC_KEYS.blockedDomains] = legacyBlacklist;
+    } else {
+      syncPatch[STORAGE_SYNC_KEYS.blockedDomains] = DEFAULT_BLACKLIST;
+    }
+  }
+  if (!Array.isArray(syncData[STORAGE_SYNC_KEYS.allowedDomains])) {
+    syncPatch[STORAGE_SYNC_KEYS.allowedDomains] = [];
   }
   if (typeof syncData.enabled !== "boolean") {
     syncPatch.enabled = true;
+  }
+  if (
+    syncData.siteListMode !== SITE_LIST_MODE_BLACKLIST &&
+    syncData.siteListMode !== SITE_LIST_MODE_WHITELIST
+  ) {
+    syncPatch.siteListMode = SITE_LIST_MODE_BLACKLIST;
   }
   const sl = syncData.shameLevel;
   if (typeof sl !== "number" || sl < 1 || sl > 5) {
@@ -515,7 +622,7 @@ async function initializeDefaults() {
   }
 }
 
-async function redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, destinationUrl) {
+async function redirectTabIfStillOnBlockedSite(tabId, redirectSettings, destinationUrl) {
   await new Promise((r) => setTimeout(r, 75));
 
   let tab;
@@ -541,7 +648,7 @@ async function redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSetting
     return;
   }
 
-  const stillBlocked = blacklist.some((blocked) => hostnameMatchesBlockedEntry(host, blocked));
+  const stillBlocked = shouldBlockHostname(host, redirectSettings);
   if (!stillBlocked) {
     return;
   }
@@ -555,7 +662,7 @@ async function redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSetting
 
 async function trackRedirectAttempt(tabId, url) {
   const redirectSettings = await getSettings();
-  const { blacklist, enabled, redirectMode, customRedirectUrl } = redirectSettings;
+  const { enabled, redirectMode, customRedirectUrl } = redirectSettings;
 
   if (!enabled) {
     return;
@@ -568,7 +675,7 @@ async function trackRedirectAttempt(tabId, url) {
     return;
   }
 
-  const isBlocked = blacklist.some((blocked) => hostnameMatchesBlockedEntry(hostname, blocked));
+  const isBlocked = shouldBlockHostname(hostname, redirectSettings);
   if (!isBlocked) {
     return;
   }
@@ -618,7 +725,7 @@ async function trackRedirectAttempt(tabId, url) {
       lastRedirectDay: today
     });
 
-    await redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, customRedirectUrl);
+    await redirectTabIfStillOnBlockedSite(tabId, redirectSettings, customRedirectUrl);
 
     await logRedirect({ timestamp: redirectedAt, site, slug: "__custom__" });
     await updateRules();
@@ -691,7 +798,7 @@ async function trackRedirectAttempt(tabId, url) {
 
   await chrome.alarms.create(alarmName, { delayInMinutes: 15 });
 
-  await redirectTabIfStillOnBlockedSite(tabId, blacklist, redirectSettings, destinationUrl);
+  await redirectTabIfStillOnBlockedSite(tabId, redirectSettings, destinationUrl);
 
   await updateRules();
 }
@@ -702,15 +809,30 @@ async function executeRemovalOneDomain(domainRaw) {
     return;
   }
 
-  const syncRaw = await chrome.storage.sync.get([STORAGE_SYNC_KEYS.blacklist]);
-  let blacklist = Array.isArray(syncRaw.blacklist) ? [...syncRaw.blacklist] : [];
-  blacklist = blacklist.filter((b) => canonicalizeDomain(b) !== target);
+  const syncRaw = await chrome.storage.sync.get([
+    STORAGE_SYNC_KEYS.blockedDomains,
+    STORAGE_SYNC_KEYS.allowedDomains,
+    STORAGE_SYNC_KEYS.siteListMode
+  ]);
+  const siteListMode = syncRaw[STORAGE_SYNC_KEYS.siteListMode];
 
   const localRaw = await chrome.storage.local.get([STORAGE_LOCAL_KEYS.pendingRemovals]);
   let pending = Array.isArray(localRaw.pendingRemovals) ? [...localRaw.pendingRemovals] : [];
   pending = pending.filter((pr) => canonicalizeDomain(pr.domain) !== target);
 
-  await chrome.storage.sync.set({ [STORAGE_SYNC_KEYS.blacklist]: blacklist });
+  if (siteListMode === SITE_LIST_MODE_WHITELIST) {
+    let allowedDomains = Array.isArray(syncRaw[STORAGE_SYNC_KEYS.allowedDomains])
+      ? [...syncRaw[STORAGE_SYNC_KEYS.allowedDomains]]
+      : [];
+    allowedDomains = allowedDomains.filter((d) => canonicalizeDomain(d) !== target);
+    await chrome.storage.sync.set({ [STORAGE_SYNC_KEYS.allowedDomains]: allowedDomains });
+  } else {
+    let blockedDomains = Array.isArray(syncRaw[STORAGE_SYNC_KEYS.blockedDomains])
+      ? [...syncRaw[STORAGE_SYNC_KEYS.blockedDomains]]
+      : [];
+    blockedDomains = blockedDomains.filter((d) => canonicalizeDomain(d) !== target);
+    await chrome.storage.sync.set({ [STORAGE_SYNC_KEYS.blockedDomains]: blockedDomains });
+  }
   await chrome.storage.local.set({ [STORAGE_LOCAL_KEYS.pendingRemovals]: pending });
   await updateRules();
 }
@@ -752,8 +874,10 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     return;
   }
   if (
-    changes.blacklist ||
+    changes.blockedDomains ||
+    changes.allowedDomains ||
     changes.enabled ||
+    changes.siteListMode ||
     changes.redirectMode ||
     changes.customRedirectUrl ||
     changes.shameLevel

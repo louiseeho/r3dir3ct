@@ -553,8 +553,12 @@
         width: min(337px, 100%);
         height: auto;
         aspect-ratio: 337 / 99;
-        margin-top: 12px;
+        margin: 0 auto;
         cursor: default;
+      }
+
+      #heatmap-peak {
+        text-align: center;
       }
 
       #heatmap-tooltip {
@@ -710,6 +714,11 @@
         padding: 8px 0 0 12px;
       }
 
+      .site-mode-row {
+        padding-top: 4px;
+        margin-bottom: 12px;
+      }
+
       .dash-select {
         flex: 1;
         max-width: 100%;
@@ -754,7 +763,7 @@
         margin: 8px 0 0;
         padding: 0 12px;
         color: var(--muted);
-        font-size: 11px;
+        font-size: 12px;
         line-height: 1.55;
       }
 
@@ -974,7 +983,7 @@
           <span class="arrow">→</span> <span class="cmd">status</span>
         </div>
         <div class="line">
-          blocking <span class="val" id="blocked-count">0</span> sites ·
+          listed <span class="val" id="blocked-count">0</span> sites ·
           <span class="val" id="redirects-today">0</span> redirects today
         </div>
         <div class="line leetcode-only">
@@ -992,7 +1001,16 @@
 
         <div class="section">
           <div class="line">
-            <span class="arrow">→</span> <span class="cmd">blocked sites</span>
+            <span class="arrow">→</span> <span class="cmd">site mode</span>
+          </div>
+          <div class="select-row site-mode-row">
+            <select id="site-list-mode-select" class="dash-select" aria-label="Site list mode">
+              <option value="blacklist">block listed sites</option>
+              <option value="whitelist">block everything except listed sites</option>
+            </select>
+          </div>
+          <div class="line">
+            <span class="arrow">→</span> <span class="cmd" id="site-list-title">blocked sites</span>
           </div>
           <div id="sites-list"></div>
           <div id="problem-gate-line" class="line problem-gate-line"></div>
@@ -1116,9 +1134,11 @@
               Stronger green = more redirects through that slot. Hover a square for the exact count. Useful for spotting when cravings cluster.
             </p>
           </div>
-          <canvas id="heatmap-canvas" width="337" height="99" aria-label="Craving heatmap last 30 days"></canvas>
-          <div id="heatmap-tooltip" role="tooltip" aria-live="polite"></div>
-          <div class="line" id="heatmap-peak">peak: —</div>
+          <div class="section">
+            <canvas id="heatmap-canvas" width="337" height="99" aria-label="Craving heatmap last 30 days"></canvas>
+            <div id="heatmap-tooltip" role="tooltip" aria-live="polite"></div>
+            <div class="line" id="heatmap-peak">peak: —</div>
+          </div>
           <div class="section section--plain">
             <button type="button" class="rand-link" id="heatmap-back">→ back</button>
           </div>
@@ -1135,7 +1155,9 @@
               afterward.
             </p>
           </div>
-          <div id="queue-list"></div>
+          <div class="section">
+            <div id="queue-list"></div>
+          </div>
           <div class="section section--plain">
             <button type="button" class="rand-link" id="queue-back">→ back</button>
           </div>

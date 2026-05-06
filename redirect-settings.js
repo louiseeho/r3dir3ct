@@ -1,8 +1,13 @@
 export const STORAGE_REDIRECT_MODE = "redirectMode";
 export const STORAGE_CUSTOM_REDIRECT_URL = "customRedirectUrl";
+export const STORAGE_SITE_LIST_MODE = "siteListMode";
+export const STORAGE_BLOCKED_DOMAINS = "blockedDomains";
+export const STORAGE_ALLOWED_DOMAINS = "allowedDomains";
 
 export const REDIRECT_MODE_LEETCODE = "leetcode";
 export const REDIRECT_MODE_CUSTOM = "custom";
+export const SITE_LIST_MODE_BLACKLIST = "blacklist";
+export const SITE_LIST_MODE_WHITELIST = "whitelist";
 
 const LEETCODE_PROBLEM_PREFIX = "https://leetcode.com/problems/";
 
@@ -38,10 +43,20 @@ export function normalizeHttpsUrl(raw) {
 export function parseRedirectSettingsFromSync(syncData) {
   const mode =
     syncData.redirectMode === REDIRECT_MODE_CUSTOM ? REDIRECT_MODE_CUSTOM : REDIRECT_MODE_LEETCODE;
+  const siteListMode =
+    syncData.siteListMode === SITE_LIST_MODE_WHITELIST
+      ? SITE_LIST_MODE_WHITELIST
+      : SITE_LIST_MODE_BLACKLIST;
+  const blockedDomains = Array.isArray(syncData[STORAGE_BLOCKED_DOMAINS])
+    ? syncData[STORAGE_BLOCKED_DOMAINS]
+    : Array.isArray(syncData.blacklist)
+      ? syncData.blacklist
+      : [];
+  const allowedDomains = Array.isArray(syncData[STORAGE_ALLOWED_DOMAINS]) ? syncData[STORAGE_ALLOWED_DOMAINS] : [];
   const rawCustom = typeof syncData.customRedirectUrl === "string" ? syncData.customRedirectUrl : "";
   const customRedirectUrl =
     mode === REDIRECT_MODE_CUSTOM ? normalizeHttpsUrl(rawCustom) || "" : "";
-  return { redirectMode: mode, customRedirectUrl };
+  return { redirectMode: mode, customRedirectUrl, siteListMode, blockedDomains, allowedDomains };
 }
 
 /**

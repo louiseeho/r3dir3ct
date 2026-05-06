@@ -5,18 +5,23 @@ import { problems } from "./problems.js";
 import {
   REDIRECT_MODE_LEETCODE,
   REDIRECT_MODE_CUSTOM,
+  SITE_LIST_MODE_BLACKLIST,
+  SITE_LIST_MODE_WHITELIST,
   normalizeHttpsUrl,
   describeCustomTargetShort,
   parseRedirectSettingsFromSync,
   STORAGE_REDIRECT_MODE,
-  STORAGE_CUSTOM_REDIRECT_URL
+  STORAGE_CUSTOM_REDIRECT_URL,
+  STORAGE_SITE_LIST_MODE
 } from "./redirect-settings.js";
 import { attachFollowingCaret, syncAllFollowingCarets } from "./caret-follow.js";
 
 const SYNC_KEYS = {
-  blacklist: "blacklist",
+  blockedDomains: "blockedDomains",
+  allowedDomains: "allowedDomains",
   enabled: "enabled",
   lcUsername: "lcUsername",
+  siteListMode: STORAGE_SITE_LIST_MODE,
   redirectMode: STORAGE_REDIRECT_MODE,
   customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL,
   shameLevel: "shameLevel"
@@ -76,6 +81,8 @@ const customUrlInputEl = document.getElementById("custom-url-input");
 const customUrlFeedbackEl = document.getElementById("custom-url-feedback");
 const customTargetDisplayEl = document.getElementById("custom-target-display");
 const customUrlMissingHintEl = document.getElementById("custom-url-missing");
+const siteListModeSelectEl = document.getElementById("site-list-mode-select");
+const siteListTitleEl = document.getElementById("site-list-title");
 const shameTokensEl = document.getElementById("shame-level-tokens");
 const problemGateLineEl = document.getElementById("problem-gate-line");
 
@@ -274,6 +281,19 @@ function applyRedirectModeUi(mode, customHref, rawCustomInput) {
   }
 }
 
+function applySiteListModeUi(siteListMode) {
+  const whitelist = siteListMode === SITE_LIST_MODE_WHITELIST;
+  if (siteListModeSelectEl) {
+    siteListModeSelectEl.value = whitelist ? SITE_LIST_MODE_WHITELIST : SITE_LIST_MODE_BLACKLIST;
+  }
+  if (siteListTitleEl) {
+    siteListTitleEl.textContent = whitelist ? "allowed sites" : "blocked sites";
+  }
+  if (siteInputEl) {
+    siteInputEl.placeholder = whitelist ? "add allowed domain..." : "add blocked domain...";
+  }
+}
+
 function hideCustomUrlFeedback() {
   customUrlFeedbackEl.textContent = "";
   customUrlFeedbackEl.classList.add("panel-hidden");
@@ -322,9 +342,13 @@ async function clearLeetCodeSolvePipeline() {
 async function fetchState() {
   const [syncData, localData] = await Promise.all([
     chrome.storage.sync.get([
-      SYNC_KEYS.blacklist,
+      // legacy key (pre separate allow/blocked lists)
+      "blacklist",
+      SYNC_KEYS.blockedDomains,
+      SYNC_KEYS.allowedDomains,
       SYNC_KEYS.enabled,
       SYNC_KEYS.lcUsername,
+      SYNC_KEYS.siteListMode,
       SYNC_KEYS.redirectMode,
       SYNC_KEYS.customRedirectUrl,
       SYNC_KEYS.shameLevel
@@ -338,11 +362,11 @@ async function fetchState() {
     ])
   ]);
 
-  const { redirectMode, customRedirectUrl } = parseRedirectSettingsFromSync(syncData);
+  const { redirectMode, customRedirectUrl, siteListMode, blockedDomains, allowedDomains } =
+    parseRedirectSettingsFromSync(syncData);
   const rawCustomUrlStored =
     typeof syncData.customRedirectUrl === "string" ? syncData.customRedirectUrl : "";
 
-  const blacklist = Array.isArray(syncData.blacklist) ? syncData.blacklist : [];
   const enabled = syncData.enabled !== false;
   const today = getTodayISO();
   const redirectsToday = localData.redirectsDate === today ? localData.redirectsToday || 0 : 0;
@@ -359,13 +383,17 @@ async function fetchState() {
   }
 
   return {
-    blacklist,
+    // "blacklist" in the UI means "the currently edited site list", not necessarily the storage blacklist.
+    blacklist: siteListMode === SITE_LIST_MODE_WHITELIST ? allowedDomains : blockedDomains,
+    blockedDomains,
+    allowedDomains,
     enabled,
     lcUsername: typeof syncData.lcUsername === "string" ? syncData.lcUsername : "",
     lastSlug: lastSlugUi,
     lastDifficulty: localData.lastRedirectDifficulty || "n/a",
     redirectsToday,
     streak: localData.redirectStreak || 0,
+    siteListMode,
     redirectMode,
     customRedirectUrl,
     rawCustomUrlStored,
@@ -410,6 +438,7 @@ function renderProblemGateLine(problemGateRaw) {
 
 function renderSites(blacklist, pendingRaw, problemGateRaw) {
   sitesListEl.innerHTML = "";
+  const whitelistMode = siteListModeSelectEl?.value === SITE_LIST_MODE_WHITELIST;
   const pendingArr = Array.isArray(pendingRaw) ? pendingRaw : [];
   const pendingByKey = new Map();
   for (const p of pendingArr) {
@@ -421,14 +450,14 @@ function renderSites(blacklist, pendingRaw, problemGateRaw) {
     const pend = pendingByKey.get(canonicalizeDomainKey(site));
 
     const row = document.createElement("div");
-    row.className = pend ? "site-row site-row--queued" : "site-row";
+    row.className = pend && !whitelistMode ? "site-row site-row--queued" : "site-row";
 
-    if (pend) {
+    if (pend && !whitelistMode) {
       row.dataset.executeAfter = String(pend.executeAfter);
       row.dataset.gateOpen = gateOpen ? "1" : "";
     }
 
-    if (pend) {
+    if (pend && !whitelistMode) {
       const cancelBtn = document.createElement("button");
       cancelBtn.className = "cancel-removal-btn";
       cancelBtn.type = "button";
@@ -458,9 +487,17 @@ function renderSites(blacklist, pendingRaw, problemGateRaw) {
       removeBtn.className = "remove-btn";
       removeBtn.type = "button";
       removeBtn.textContent = "[×]";
-      removeBtn.title = `Queue removal (${site})`;
+      removeBtn.title = whitelistMode ? `Remove (${site})` : `Queue removal (${site})`;
       removeBtn.addEventListener("click", async () => {
-        await queueRemovalForSite(site);
+        if (whitelistMode) {
+          const data = await chrome.storage.sync.get([SYNC_KEYS.allowedDomains]);
+          const existing = Array.isArray(data[SYNC_KEYS.allowedDomains]) ? data[SYNC_KEYS.allowedDomains] : [];
+          const next = existing.filter((d) => canonicalizeDomainKey(d) !== canonicalizeDomainKey(site));
+          await chrome.storage.sync.set({ [SYNC_KEYS.allowedDomains]: next });
+          await cancelPendingRemoval(site);
+        } else {
+          await queueRemovalForSite(site);
+        }
         await renderMain();
       });
 
@@ -485,12 +522,15 @@ async function renderMain() {
   let state = await fetchState();
 
   applyRedirectModeUi(state.redirectMode, state.customRedirectUrl, state.rawCustomUrlStored);
+  applySiteListModeUi(state.siteListMode);
 
   if (activeView === "queue" && state.redirectMode === REDIRECT_MODE_CUSTOM) {
     showView("main");
   }
 
-  await runPendingRemovalPassOnOpen(state.blacklist);
+  const pendingRemovalList =
+    state.siteListMode === SITE_LIST_MODE_BLACKLIST ? state.blockedDomains : [];
+  await runPendingRemovalPassOnOpen(pendingRemovalList);
 
   state = await fetchState();
   const gateLocalFresh = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals, LOCAL_KEYS.problemGate]);
@@ -611,8 +651,10 @@ siteInputEl.addEventListener("keydown", async (event) => {
     return;
   }
 
-  const data = await chrome.storage.sync.get([SYNC_KEYS.blacklist]);
-  const existing = Array.isArray(data.blacklist) ? data.blacklist : [];
+  const whitelistMode = siteListModeSelectEl?.value === SITE_LIST_MODE_WHITELIST;
+  const listKey = whitelistMode ? SYNC_KEYS.allowedDomains : SYNC_KEYS.blockedDomains;
+  const data = await chrome.storage.sync.get([listKey]);
+  const existing = Array.isArray(data[listKey]) ? data[listKey] : [];
 
   const localPick = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals]);
   const pendingPrev = Array.isArray(localPick.pendingRemovals) ? localPick.pendingRemovals : [];
@@ -623,7 +665,7 @@ siteInputEl.addEventListener("keydown", async (event) => {
   }
 
   if (!existing.includes(normalized)) {
-    await chrome.storage.sync.set({ blacklist: [...existing, normalized] });
+    await chrome.storage.sync.set({ [listKey]: [...existing, normalized] });
   }
 
   await renderMain();
@@ -651,6 +693,18 @@ redirectModeSelectEl.addEventListener("change", async () => {
 
   await chrome.storage.sync.set({ [STORAGE_REDIRECT_MODE]: next });
   hideCustomUrlFeedback();
+  await renderMain();
+});
+
+siteListModeSelectEl?.addEventListener("change", async () => {
+  const next =
+    siteListModeSelectEl.value === SITE_LIST_MODE_WHITELIST
+      ? SITE_LIST_MODE_WHITELIST
+      : SITE_LIST_MODE_BLACKLIST;
+  await chrome.storage.sync.set({ [STORAGE_SITE_LIST_MODE]: next });
+  if (next === SITE_LIST_MODE_WHITELIST) {
+    await chrome.storage.local.set({ pendingRemovals: [] });
+  }
   await renderMain();
 });
 
@@ -710,12 +764,14 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     return;
   }
   const relevant =
-    changes.blacklist ||
+    changes.blockedDomains ||
+    changes.allowedDomains ||
     changes.enabled ||
     changes.lcUsername ||
     changes.redirectMode ||
     changes.customRedirectUrl ||
     changes.shameLevel ||
+    changes.siteListMode ||
     changes.lastRedirectSlug ||
     changes.lastRedirectDifficulty ||
     changes.redirectsToday ||
@@ -937,16 +993,7 @@ async function tickRemovalSitesUi() {
   if (activeView !== "main") {
     return;
   }
-  const syncBefore = await chrome.storage.sync.get([SYNC_KEYS.blacklist]);
-  const blacklistBefore = Array.isArray(syncBefore.blacklist) ? syncBefore.blacklist : [];
-  await runPendingRemovalPassOnOpen(blacklistBefore);
-  const localData = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals, LOCAL_KEYS.problemGate]);
-  const syncAfter = await chrome.storage.sync.get([SYNC_KEYS.blacklist]);
-  const blacklist = Array.isArray(syncAfter.blacklist) ? syncAfter.blacklist : [];
-  renderSites(blacklist, localData.pendingRemovals, localData.problemGate);
-  renderProblemGateLine(localData.problemGate);
-
-  blockedCountEl.textContent = String(blacklist.length);
+  await renderMain();
 }
 
 function ensureRemovalCountdownTick() {
