@@ -8,6 +8,16 @@
     return m ? decodeURIComponent(m[1]) : "";
   }
 
+  /** Map message length to a 5–10 s countdown (short lines ~5s, long ~10s). */
+  function countdownSecondsForMessage(text) {
+    const len = String(text).length;
+    const minLen = 24;
+    const maxLen = 140;
+    const t = Math.min(1, Math.max(0, (len - minLen) / (maxLen - minLen)));
+    const sec = Math.round(5 + t * 5);
+    return Math.min(10, Math.max(5, sec));
+  }
+
   function teardown(host, onKey) {
     if (typeof onKey === "function") {
       document.removeEventListener("keydown", onKey, true);
@@ -16,34 +26,33 @@
     host?.remove();
   }
 
-  chrome.storage.local.get([STORAGE_KEY], (data) => {
-    if (chrome.runtime.lastError) {
-      return;
-    }
-
-    const payload = data[STORAGE_KEY];
+  /**
+   * @param {unknown} payload
+   * @returns {boolean} true if overlay was mounted
+   */
+  function mountIfValid(payload) {
     if (!payload || typeof payload !== "object") {
-      return;
+      return false;
     }
-    if (typeof payload.slug !== "string" || typeof payload.text !== "string") {
-      chrome.storage.local.remove(STORAGE_KEY);
-      return;
+    const p = /** @type {{ slug?: string; text?: string; ts?: number }} */ (payload);
+    if (typeof p.slug !== "string" || typeof p.text !== "string") {
+      return false;
     }
 
     const now = Date.now();
-    const ts = typeof payload.ts === "number" ? payload.ts : 0;
+    const ts = typeof p.ts === "number" ? p.ts : 0;
     if (now - ts > MAX_AGE_MS) {
       chrome.storage.local.remove(STORAGE_KEY);
-      return;
+      return false;
     }
 
     const pageSlug = slugFromPathname();
-    if (!pageSlug || pageSlug !== payload.slug) {
-      return;
+    if (!pageSlug || pageSlug !== p.slug) {
+      return false;
     }
 
     if (document.getElementById(HOST_ID)) {
-      return;
+      return false;
     }
 
     const host = document.createElement("div");
@@ -137,7 +146,7 @@
           <p class="msg" id="r3-shame-msg"></p>
           <div class="footer">
             <span class="count" id="r3-shame-skip" tabindex="0" role="button"></span>
-            <span class="hint">click countdown, card, dimmed backdrop, or Esc</span>
+            <span class="hint">click to continue</span>
           </div>
         </div>
       </div>
@@ -149,16 +158,16 @@
     const panelEl = shadow.querySelector(".panel");
 
     if (msgEl) {
-      msgEl.textContent = payload.text;
+      msgEl.textContent = p.text;
     }
 
     let done = false;
     let intervalId = 0;
-    let seconds = 2;
+    let seconds = countdownSecondsForMessage(p.text);
 
     function tick() {
       if (skipEl) {
-        skipEl.textContent = `→ leetcode in ${seconds}s`;
+        skipEl.textContent = `→ continue in ${seconds}s`;
       }
     }
 
@@ -207,5 +216,30 @@
       }
       tick();
     }, 1000);
+
+    return true;
+  }
+
+  function tryMountFromStorage() {
+    chrome.storage.local.get([STORAGE_KEY], (data) => {
+      if (chrome.runtime.lastError) {
+        return;
+      }
+      const payload = data[STORAGE_KEY];
+      mountIfValid(payload);
+    });
+  }
+
+  tryMountFromStorage();
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[STORAGE_KEY]) {
+      return;
+    }
+    const nv = changes[STORAGE_KEY].newValue;
+    if (!nv) {
+      return;
+    }
+    mountIfValid(nv);
   });
 })();

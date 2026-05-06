@@ -68,6 +68,151 @@ function leetcodeProblemUrl(slug) {
   return `https://leetcode.com/problems/${slug}/`;
 }
 
+function parseLeetProblemSlugFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./i, "").toLowerCase();
+    if (host !== "leetcode.com") {
+      return "";
+    }
+    const m = /^\/problems\/([^/?#]+)/i.exec(u.pathname);
+    return m ? decodeURIComponent(m[1]) : "";
+  } catch {
+    return "";
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Writes shameOverlay when redirects come from declarativeNetRequest and tabs.onUpdated
+ * never saw the blocked origin (DNR rewrote the navigation before JS ran).
+ */
+async function fillShameOverlayIfNeededForUrl(problemUrl) {
+  const slug = parseLeetProblemSlugFromUrl(problemUrl);
+  if (!slug) {
+    return;
+  }
+
+  const settings = await getSettings();
+  if (!settings.enabled || settings.redirectMode === REDIRECT_MODE_CUSTOM) {
+    return;
+  }
+
+  await sleep(120);
+
+  const local = await chrome.storage.local.get([
+    STORAGE_LOCAL_KEYS.shameOverlay,
+    STORAGE_LOCAL_KEYS.todayCount,
+    STORAGE_LOCAL_KEYS.todayDate,
+    STORAGE_LOCAL_KEYS.dodgesToday,
+    STORAGE_LOCAL_KEYS.streakDays
+  ]);
+
+  const existing = local[STORAGE_LOCAL_KEYS.shameOverlay];
+  const now = Date.now();
+  if (
+    existing &&
+    existing.slug === slug &&
+    typeof existing.ts === "number" &&
+    now - existing.ts < 120000
+  ) {
+    return;
+  }
+
+  const shameSync = await chrome.storage.sync.get([STORAGE_SYNC_KEYS.shameLevel]);
+  const shameLevel = normalizeShameLevel(shameSync.shameLevel);
+
+  const today = getTodayISO();
+  const redirectsDate = local[STORAGE_LOCAL_KEYS.todayDate];
+  const redirectsToday = local[STORAGE_LOCAL_KEYS.todayCount];
+  const dodgeRaw = local[STORAGE_LOCAL_KEYS.dodgesToday];
+  const dodge =
+    redirectsDate === today && typeof dodgeRaw === "number" ? dodgeRaw : typeof redirectsToday === "number" ? redirectsToday : 0;
+  const streak =
+    typeof local[STORAGE_LOCAL_KEYS.streakDays] === "number" ? local[STORAGE_LOCAL_KEYS.streakDays] : 0;
+
+  const text = pickRandomShameQuotedMessage(shameLevel, dodge, streak);
+
+  await chrome.storage.local.set({
+    [STORAGE_LOCAL_KEYS.shameOverlay]: {
+      slug,
+      text,
+      ts: now
+    }
+  });
+}
+
+async function shameFromDnrRuleMatch(tabId, problemUrl) {
+  const pageSlug = parseLeetProblemSlugFromUrl(problemUrl);
+  if (!pageSlug || typeof tabId !== "number") {
+    return;
+  }
+
+  const settings = await getSettings();
+  if (!settings.enabled || settings.redirectMode === REDIRECT_MODE_CUSTOM) {
+    return;
+  }
+
+  await sleep(100);
+
+  let details;
+  try {
+    details = await chrome.declarativeNetRequest.getMatchedRules({
+      tabId,
+      minTimeStamp: Date.now() - 60000
+    });
+  } catch {
+    return;
+  }
+
+  const infos = details?.rulesMatchedInfo || [];
+  if (infos.length === 0) {
+    return;
+  }
+
+  let dynamicRules;
+  try {
+    dynamicRules = await chrome.declarativeNetRequest.getDynamicRules();
+  } catch {
+    return;
+  }
+
+  const byId = new Map(dynamicRules.map((r) => [r.id, r]));
+  const seen = new Set();
+
+  for (const info of infos) {
+    if (info.tabId !== tabId && info.tabId !== -1) {
+      continue;
+    }
+    const id = info.rule?.ruleId;
+    if (typeof id !== "number" || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+
+    const fullRule = byId.get(id);
+    if (!fullRule || fullRule.action?.type !== "redirect") {
+      continue;
+    }
+    const redirectUrl = fullRule.action.redirect?.url;
+    if (typeof redirectUrl !== "string" || !redirectUrl.includes("leetcode.com/problems/")) {
+      continue;
+    }
+    const ruleSlug = parseLeetProblemSlugFromUrl(redirectUrl);
+    if (
+      ruleSlug === pageSlug &&
+      typeof info.timeStamp === "number" &&
+      Date.now() - info.timeStamp <= 30000
+    ) {
+      await fillShameOverlayIfNeededForUrl(problemUrl);
+      return;
+    }
+  }
+}
+
 function getTodayISO() {
   return new Date().toISOString().split("T")[0];
 }
@@ -549,6 +694,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     }
   }
 
+  if (changeInfo.status === "complete" && candidateUrl && parseLeetProblemSlugFromUrl(candidateUrl)) {
+    void shameFromDnrRuleMatch(tabId, candidateUrl);
+  }
+
   const settings = await getSettings();
   if (!candidateUrl || isAlreadyOnRedirectDestination(candidateUrl, settings)) {
     return;
@@ -562,4 +711,26 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   tabRedirectGuard.set(tabId, now);
 
   await trackRedirectAttempt(tabId, candidateUrl);
+});
+
+chrome.webNavigation.onCommitted.addListener((details) => {
+  if (details.frameId !== 0) {
+    return;
+  }
+  if (!parseLeetProblemSlugFromUrl(details.url)) {
+    return;
+  }
+  let host = "";
+  try {
+    host = new URL(details.url).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return;
+  }
+  if (host !== "leetcode.com") {
+    return;
+  }
+  const qualifiers = details.transitionQualifiers || [];
+  if (qualifiers.includes("server_redirect")) {
+    void fillShameOverlayIfNeededForUrl(details.url);
+  }
 });

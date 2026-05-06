@@ -4,11 +4,18 @@
   "name": "r3dir3ct",
   "version": "1.0.0",
   "description": "r3dir3ct blocks distracting websites and redirects you to a random problem instead.",
-  "permissions": ["declarativeNetRequest", "storage", "tabs", "alarms"],
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "storage",
+    "tabs",
+    "alarms",
+    "webNavigation"
+  ],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {
-      "matches": ["https://leetcode.com/problems/*"],
+      "matches": ["https://leetcode.com/problems/*", "https://www.leetcode.com/problems/*"],
       "js": ["shame-overlay.js"],
       "run_at": "document_idle"
     }
