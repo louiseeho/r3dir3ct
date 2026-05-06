@@ -45,7 +45,8 @@
         align-items: flex-start;
         padding: 28px 20px 40px;
         position: relative;
-        overflow: hidden;
+        overflow-x: hidden;
+        overflow-y: auto;
       }
 
       body::before {
@@ -67,7 +68,9 @@
         z-index: 1;
         width: 100%;
         max-width: 720px;
+        height: min(620px, calc(100vh - 56px));
         min-height: min(620px, calc(100vh - 56px));
+        max-height: calc(100vh - 56px);
         border: 1px solid var(--border);
         border-radius: 10px;
         background: linear-gradient(160deg, rgba(22, 27, 34, 0.96) 0%, rgba(13, 17, 23, 0.98) 62%);
@@ -80,6 +83,40 @@
         display: flex;
         flex-direction: column;
         animation: app-enter 480ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      .app::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        padding: 1px;
+        pointer-events: none;
+        z-index: 0;
+        background: linear-gradient(
+          110deg,
+          transparent 12%,
+          rgba(121, 192, 255, 0.5) 40%,
+          rgba(126, 231, 135, 0.38) 54%,
+          transparent 80%
+        );
+        background-size: 210% 100%;
+        background-position: 115% 0;
+        -webkit-mask:
+          linear-gradient(#000 0 0) content-box,
+          linear-gradient(#000 0 0);
+        mask:
+          linear-gradient(#000 0 0) content-box,
+          linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        opacity: 0.36;
+        animation: border-sweep 9s linear infinite;
+      }
+
+      .app > * {
+        position: relative;
+        z-index: 1;
       }
 
       .titlebar {
@@ -164,8 +201,16 @@
       .content {
         padding: 20px 24px 24px;
         flex: 1;
+        position: relative;
         overflow-y: auto;
         overflow-x: clip;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+
+      .content::-webkit-scrollbar {
+        width: 0;
+        height: 0;
       }
 
       .line {
@@ -220,6 +265,20 @@
         border-color: rgba(121, 192, 255, 0.45);
         box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
         transform: translateY(-1px);
+      }
+
+      .section.section--plain {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        transform: none;
+      }
+
+      .section.section--plain:hover {
+        border-color: transparent;
+        box-shadow: none;
+        transform: none;
       }
 
       #sites-list {
@@ -498,7 +557,7 @@
       }
 
       #heatmap-tooltip {
-        position: fixed;
+        position: absolute;
         z-index: 110000;
         min-width: 160px;
         max-width: 260px;
@@ -606,16 +665,41 @@
         cursor: pointer;
         padding: 0;
         font-size: inherit;
+        position: relative;
+        overflow: hidden;
         transition:
           color 140ms ease,
           transform 140ms ease,
           text-shadow 140ms ease;
       }
 
+      .rand-link::after {
+        content: "";
+        position: absolute;
+        top: -180%;
+        left: -35%;
+        width: 40%;
+        height: 460%;
+        pointer-events: none;
+        transform: rotate(22deg) translateX(-140%);
+        background: linear-gradient(
+          180deg,
+          transparent 0%,
+          rgba(121, 192, 255, 0.06) 28%,
+          rgba(121, 192, 255, 0.22) 50%,
+          rgba(121, 192, 255, 0.06) 72%,
+          transparent 100%
+        );
+      }
+
       .rand-link:hover {
         color: var(--accent);
         transform: translateY(-1px);
         text-shadow: 0 0 14px rgba(121, 192, 255, 0.35);
+      }
+
+      .rand-link:hover::after {
+        animation: link-sheen 680ms ease;
       }
 
       .select-row {
@@ -816,6 +900,29 @@
         }
       }
 
+      @keyframes border-sweep {
+        0% {
+          background-position: 115% 0;
+        }
+        100% {
+          background-position: -120% 0;
+        }
+      }
+
+      @keyframes link-sheen {
+        0% {
+          transform: rotate(22deg) translateX(-140%);
+          opacity: 0;
+        }
+        18% {
+          opacity: 1;
+        }
+        100% {
+          transform: rotate(22deg) translateX(320%);
+          opacity: 0;
+        }
+      }
+
       @keyframes title-shimmer {
         0%,
         85%,
@@ -836,6 +943,10 @@
           animation: none !important;
           transition-duration: 0.01ms !important;
           transition-delay: 0ms !important;
+        }
+
+        .app::after {
+          opacity: 0.35;
         }
       }
     </style>
@@ -1008,7 +1119,7 @@
           <canvas id="heatmap-canvas" width="337" height="99" aria-label="Craving heatmap last 30 days"></canvas>
           <div id="heatmap-tooltip" role="tooltip" aria-live="polite"></div>
           <div class="line" id="heatmap-peak">peak: —</div>
-          <div class="section">
+          <div class="section section--plain">
             <button type="button" class="rand-link" id="heatmap-back">→ back</button>
           </div>
         </div>
@@ -1025,7 +1136,7 @@
             </p>
           </div>
           <div id="queue-list"></div>
-          <div class="section">
+          <div class="section section--plain">
             <button type="button" class="rand-link" id="queue-back">→ back</button>
           </div>
         </div>

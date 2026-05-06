@@ -43,10 +43,15 @@ function showHeatmapTooltip(el, clock, day, n) {
  * @param {number} clientY
  */
 function placeHeatmapTooltip(el, clientX, clientY) {
+  const parent = el.offsetParent instanceof HTMLElement ? el.offsetParent : document.documentElement;
+  const pr = parent.getBoundingClientRect();
   const offset = 14;
   const margin = 10;
-  let x = Math.round(clientX + offset);
-  let y = Math.round(clientY + offset);
+  const scrollLeft = parent instanceof HTMLElement ? parent.scrollLeft : 0;
+  const scrollTop = parent instanceof HTMLElement ? parent.scrollTop : 0;
+
+  let x = Math.round(clientX - pr.left + scrollLeft + offset);
+  let y = Math.round(clientY - pr.top + scrollTop + offset);
   el.style.left = `${x}px`;
   el.style.top = `${y}px`;
 
@@ -54,11 +59,14 @@ function placeHeatmapTooltip(el, clientX, clientY) {
     const r = el.getBoundingClientRect();
     let nx = x;
     let ny = y;
-    if (r.right > window.innerWidth - margin) {
-      nx = window.innerWidth - r.width - margin;
+
+    const maxW = parent instanceof HTMLElement ? parent.clientWidth : window.innerWidth;
+    const maxH = parent instanceof HTMLElement ? parent.clientHeight : window.innerHeight;
+    if (nx + r.width > maxW - margin) {
+      nx = maxW - r.width - margin;
     }
-    if (r.bottom > window.innerHeight - margin) {
-      ny = window.innerHeight - r.height - margin;
+    if (ny + r.height > maxH - margin) {
+      ny = maxH - r.height - margin;
     }
     nx = Math.max(margin, nx);
     ny = Math.max(margin, ny);
