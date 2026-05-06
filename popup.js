@@ -1,4 +1,4 @@
-import { pickNextProblem, getSrsPayload } from "./srs.js";
+import { pickNextProblem, getSchedulePayload } from "./schedule.js";
 import { getHeatmapData } from "./behavior.js";
 import { renderHeatmap, formatPeakLine } from "./heatmap.js";
 import { problems } from "./problems.js";
@@ -314,8 +314,8 @@ async function renderHeatmapPanel() {
 }
 
 async function renderQueuePanel() {
-  const srs = await getSrsPayload();
-  const records = srs.records && typeof srs.records === "object" ? srs.records : {};
+  const payload = await getSchedulePayload();
+  const records = payload.records && typeof payload.records === "object" ? payload.records : {};
   const now = Date.now();
 
   const scheduled = Object.entries(records)
@@ -501,7 +501,7 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     changes.redirectsToday ||
     changes.redirectsDate ||
     changes.redirectStreak ||
-    changes.srs ||
+    changes.schedule ||
     changes.behaviorLog;
 
   if (!relevant) {

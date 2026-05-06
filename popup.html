@@ -504,7 +504,7 @@
         position: fixed;
         z-index: 100000;
         box-sizing: border-box;
-        width: min(288px, calc(100vw - 24px));
+        width: min(380px, calc(100vw - 28px));
         margin: 0;
         padding: 10px 12px;
         background: var(--surface);
@@ -605,7 +605,7 @@
           </div>
           <div class="select-row">
             <select id="redirect-mode-select" class="dash-select" aria-label="Redirect target mode">
-              <option value="leetcode">leetcode (random problems, SRS)</option>
+              <option value="leetcode">leetcode</option>
               <option value="custom">custom https url</option>
             </select>
           </div>
@@ -689,13 +689,14 @@
         </div>
 
         <div id="view-queue" class="panel-hidden">
-          <div class="line"><span class="arrow">→</span> SRS review queue · <span id="queue-header">due problems (0)</span></div>
+          <div class="line"><span class="arrow">→</span> review queue · <span id="queue-header">due problems (0)</span></div>
           <div class="dashboard-help">
             <p>
-              Spaced repetition (SRS) decides when problems should come back based on solves vs “dodges” after redirects. Overdue slots show first; upcoming reviews list with their due dates.
+              After you're sent to a problem, this list tells you what you need review, in order of when they are due.
             </p>
             <p>
-              Only meaningful in LeetCode mode with your username filled in—you need recent submission data so the scheduler can react.
+              Works in LeetCode mode when your username is saved, so r3dir3ct can see whether you solved the problem
+              afterward.
             </p>
           </div>
           <div id="queue-list"></div>
@@ -707,8 +708,8 @@
     </div>
 
     <div id="lc-help-tooltip-desc" class="lc-help-tip-floating panel-hidden" role="tooltip">
-      After you’re redirected to a problem, this extension waits, then asks LeetCode (in your logged-in browser session)
-      whether you got an accepted submission. Those results update the SRS review queue and mark attempts on your craving
+      After you're redirected to a problem, this extension waits, then asks LeetCode (in your logged-in browser session)
+      whether you got an accepted submission. Those results update the review queue and mark attempts on your craving
       timeline.
     </div>
 

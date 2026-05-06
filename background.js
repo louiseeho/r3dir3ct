@@ -1,4 +1,4 @@
-import { pickNextProblem, noteRedirectForSrs, updateRecord } from "./srs.js";
+import { pickNextProblem, noteRedirectForSchedule, updateRecord, ensureScheduleBlobSeeded } from "./schedule.js";
 import { checkSolved } from "./graphql.js";
 import { logRedirect, updateSolveStatus } from "./behavior.js";
 import {
@@ -33,14 +33,7 @@ const STORAGE_LOCAL_KEYS = {
   todayDate: "redirectsDate",
   streak: "redirectStreak",
   lastRedirectDay: "lastRedirectDay",
-  srs: "srs",
   pendingChecks: "pendingChecks"
-};
-
-const SRS_INIT = {
-  records: {},
-  totalRedirects: 0,
-  lastSlug: ""
 };
 
 const tabRedirectGuard = new Map();
@@ -210,8 +203,7 @@ async function initializeDefaults() {
   const localData = await chrome.storage.local.get([
     STORAGE_LOCAL_KEYS.todayCount,
     STORAGE_LOCAL_KEYS.todayDate,
-    STORAGE_LOCAL_KEYS.streak,
-    STORAGE_LOCAL_KEYS.srs
+    STORAGE_LOCAL_KEYS.streak
   ]);
   const today = getTodayISO();
   const localPatch = {};
@@ -225,9 +217,7 @@ async function initializeDefaults() {
   if (typeof localData.redirectStreak !== "number") {
     localPatch.redirectStreak = 0;
   }
-  if (!localData.srs || typeof localData.srs !== "object") {
-    localPatch.srs = { ...SRS_INIT };
-  }
+  await ensureScheduleBlobSeeded();
   if (Object.keys(localPatch).length > 0) {
     await chrome.storage.local.set(localPatch);
   }
@@ -385,7 +375,7 @@ async function trackRedirectAttempt(tabId, url) {
   });
 
   await logRedirect({ timestamp: redirectedAt, site, slug: selected.slug });
-  await noteRedirectForSrs(selected.slug);
+  await noteRedirectForSchedule(selected.slug);
 
   const alarmName = `checkSolve__${selected.slug}__${redirectedAt}`;
   const pendingMap =

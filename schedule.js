@@ -1,15 +1,64 @@
 import { problems } from "./problems.js";
 
-const SRS_KEY = "srs";
+const SCHEDULE_STORAGE_KEY = "schedule";
+/** Prior local key — data is copied to `schedule` and this key is removed on first read. */
+const LEGACY_SCHEDULE_STORAGE_KEY = "srs";
 
 const difficultyBySlug = new Map(problems.map((p) => [p.slug, p.difficulty]));
 
-function emptySrs() {
+function emptySchedule() {
   return {
     records: {},
     totalRedirects: 0,
     lastSlug: ""
   };
+}
+
+/**
+ * Load schedule state from `chrome.storage.local`, migrating from the old key if needed.
+ */
+async function loadScheduleState() {
+  const raw = await chrome.storage.local.get([SCHEDULE_STORAGE_KEY, LEGACY_SCHEDULE_STORAGE_KEY]);
+  let blob = raw[SCHEDULE_STORAGE_KEY];
+
+  if (blob && typeof blob === "object") {
+    return blob;
+  }
+
+  blob = raw[LEGACY_SCHEDULE_STORAGE_KEY];
+  if (blob && typeof blob === "object") {
+    await chrome.storage.local.set({ [SCHEDULE_STORAGE_KEY]: blob });
+    await chrome.storage.local.remove(LEGACY_SCHEDULE_STORAGE_KEY);
+    return blob;
+  }
+
+  return emptySchedule();
+}
+
+async function persistScheduleState(schedule) {
+  await chrome.storage.local.set({ [SCHEDULE_STORAGE_KEY]: schedule });
+}
+
+/**
+ * Ensure a schedule blob exists under the current storage key (migrate legacy or seed empty).
+ */
+export async function ensureScheduleBlobSeeded() {
+  const raw = await chrome.storage.local.get([SCHEDULE_STORAGE_KEY, LEGACY_SCHEDULE_STORAGE_KEY]);
+
+  if (raw[SCHEDULE_STORAGE_KEY] && typeof raw[SCHEDULE_STORAGE_KEY] === "object") {
+    if (raw[LEGACY_SCHEDULE_STORAGE_KEY]) {
+      await chrome.storage.local.remove(LEGACY_SCHEDULE_STORAGE_KEY);
+    }
+    return;
+  }
+
+  if (raw[LEGACY_SCHEDULE_STORAGE_KEY] && typeof raw[LEGACY_SCHEDULE_STORAGE_KEY] === "object") {
+    await chrome.storage.local.set({ [SCHEDULE_STORAGE_KEY]: raw[LEGACY_SCHEDULE_STORAGE_KEY] });
+    await chrome.storage.local.remove(LEGACY_SCHEDULE_STORAGE_KEY);
+    return;
+  }
+
+  await chrome.storage.local.set({ [SCHEDULE_STORAGE_KEY]: emptySchedule() });
 }
 
 function getDifficulty(slug) {
@@ -48,15 +97,13 @@ function pickRandomAvoiding(slugs, excludeSlug) {
 
 /**
  * @param {string | undefined} ruleChainExclude When building multiple redirect rules,
- * exclude this slug from the *random* branch so adjacent rules differ. Omit to use SRS lastSlug.
- * @returns {Promise<{ slug: string, difficulty: string }>}
+ * exclude this slug from the *random* branch so adjacent rules differ. Omit to use last redirect slug.
  */
 export async function pickNextProblem(ruleChainExclude) {
-  const raw = await chrome.storage.local.get(SRS_KEY);
-  const srs = raw[SRS_KEY] && typeof raw[SRS_KEY] === "object" ? raw[SRS_KEY] : emptySrs();
-  const records = srs.records && typeof srs.records === "object" ? srs.records : {};
-  const lastSlug = typeof srs.lastSlug === "string" ? srs.lastSlug : "";
-  const totalRedirects = typeof srs.totalRedirects === "number" ? srs.totalRedirects : 0;
+  const schedule = await loadScheduleState();
+  const records = schedule.records && typeof schedule.records === "object" ? schedule.records : {};
+  const lastSlug = typeof schedule.lastSlug === "string" ? schedule.lastSlug : "";
+  const totalRedirects = typeof schedule.totalRedirects === "number" ? schedule.totalRedirects : 0;
   const now = Date.now();
   const randomExclude = ruleChainExclude !== undefined ? ruleChainExclude : lastSlug;
 
@@ -92,14 +139,14 @@ export async function pickNextProblem(ruleChainExclude) {
 /**
  * After a redirect is recorded: bump totals and ensure a stub record exists.
  */
-export async function noteRedirectForSrs(slug) {
-  const raw = await chrome.storage.local.get(SRS_KEY);
-  const srs = raw[SRS_KEY] && typeof raw[SRS_KEY] === "object" ? { ...emptySrs(), ...raw[SRS_KEY] } : emptySrs();
-  srs.records = srs.records && typeof srs.records === "object" ? { ...srs.records } : {};
+export async function noteRedirectForSchedule(slug) {
+  const src = await loadScheduleState();
+  const schedule = typeof src === "object" && src ? { ...emptySchedule(), ...src } : emptySchedule();
+  schedule.records = schedule.records && typeof schedule.records === "object" ? { ...schedule.records } : {};
   const now = Date.now();
-  const prev = srs.records[slug];
+  const prev = schedule.records[slug];
   if (!prev) {
-    srs.records[slug] = {
+    schedule.records[slug] = {
       slug,
       interval: 0,
       ef: 2.5,
@@ -110,19 +157,19 @@ export async function noteRedirectForSrs(slug) {
       lastSeen: now
     };
   } else {
-    srs.records[slug] = {
+    schedule.records[slug] = {
       ...prev,
       slug,
       lastSeen: now
     };
   }
-  srs.totalRedirects = (typeof srs.totalRedirects === "number" ? srs.totalRedirects : 0) + 1;
-  srs.lastSlug = slug;
-  await chrome.storage.local.set({ srs });
+  schedule.totalRedirects = (typeof schedule.totalRedirects === "number" ? schedule.totalRedirects : 0) + 1;
+  schedule.lastSlug = slug;
+  await persistScheduleState(schedule);
 }
 
 /**
- * SM-2 update after GraphQL verify. quality null → no SRS change (unknown).
+ * SM-2 update after GraphQL verify. quality null → leave schedule unchanged (unknown).
  * @param {string} slug
  * @param {number | null | undefined} quality 5=solved fast, 3=solved slow, 0=dodged
  */
@@ -131,11 +178,11 @@ export async function updateRecord(slug, quality) {
     return;
   }
 
-  const raw = await chrome.storage.local.get(SRS_KEY);
-  const srs = raw[SRS_KEY] && typeof raw[SRS_KEY] === "object" ? { ...emptySrs(), ...raw[SRS_KEY] } : emptySrs();
-  srs.records = srs.records && typeof srs.records === "object" ? { ...srs.records } : {};
+  const src = await loadScheduleState();
+  const schedule = typeof src === "object" && src ? { ...emptySchedule(), ...src } : emptySchedule();
+  schedule.records = schedule.records && typeof schedule.records === "object" ? { ...schedule.records } : {};
   const now = Date.now();
-  let rec = srs.records[slug];
+  let rec = schedule.records[slug];
   if (!rec) {
     rec = {
       slug,
@@ -189,11 +236,10 @@ export async function updateRecord(slug, quality) {
     nextDue: now + interval * 86400000,
     lastSeen: now
   };
-  srs.records[slug] = rec;
-  await chrome.storage.local.set({ srs });
+  schedule.records[slug] = rec;
+  await persistScheduleState(schedule);
 }
 
-export async function getSrsPayload() {
-  const raw = await chrome.storage.local.get(SRS_KEY);
-  return raw[SRS_KEY] && typeof raw[SRS_KEY] === "object" ? raw[SRS_KEY] : emptySrs();
+export async function getSchedulePayload() {
+  return loadScheduleState();
 }
