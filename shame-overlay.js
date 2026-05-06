@@ -146,7 +146,7 @@
           <p class="msg" id="r3-shame-msg"></p>
           <div class="footer">
             <span class="count" id="r3-shame-skip" tabindex="0" role="button"></span>
-            <span class="hint">click to continue</span>
+            <span class="hint">click to escape</span>
           </div>
         </div>
       </div>

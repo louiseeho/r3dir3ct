@@ -28,8 +28,12 @@ const LOCAL_KEYS = {
   redirectsToday: "redirectsToday",
   redirectsDate: "redirectsDate",
   streak: "redirectStreak",
-  behaviorLog: "behaviorLog"
+  behaviorLog: "behaviorLog",
+  pendingRemovals: "pendingRemovals",
+  problemGate: "problemGate"
 };
+
+const REMOVAL_DELAY_MS = 86400000;
 
 const difficultyFor = (slug) => problems.find((p) => p.slug === slug)?.difficulty || "Medium";
 
@@ -73,6 +77,7 @@ const customUrlFeedbackEl = document.getElementById("custom-url-feedback");
 const customTargetDisplayEl = document.getElementById("custom-target-display");
 const customUrlMissingHintEl = document.getElementById("custom-url-missing");
 const shameTokensEl = document.getElementById("shame-level-tokens");
+const problemGateLineEl = document.getElementById("problem-gate-line");
 
 /** @type {"main" | "heatmap" | "queue"} */
 let activeView = "main";
@@ -86,6 +91,98 @@ function getTodayISO() {
 
 function normalizeDomain(input) {
   return input.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+}
+
+/** Matches background.js canonicalizeDomain for pending removal / blacklist keys. */
+function canonicalizeDomainKey(input) {
+  const raw = String(input ?? "").trim().toLowerCase();
+  if (!raw) {
+    return "";
+  }
+  const noScheme = raw.replace(/^[a-z]+:\/\//i, "");
+  const hostOnly = noScheme.replace(/^www\./i, "").replace(/[/?#].*$/, "").replace(/:\d+$/, "");
+  return hostOnly.replace(/^\.+|\.+$/g, "");
+}
+
+function prunePendingOrphans(blacklist, pending) {
+  const keys = new Set(blacklist.map((b) => canonicalizeDomainKey(b)));
+  return pending.filter((row) => keys.has(canonicalizeDomainKey(row.domain)));
+}
+
+function isGateOpen(problemGate) {
+  if (!problemGate || typeof problemGate !== "object") {
+    return false;
+  }
+  return problemGate.unlockedOn === getTodayISO();
+}
+
+function formatRemovalRowMeta(executeAfter, gateOpen) {
+  const now = Date.now();
+  const left = executeAfter - now;
+  if (left > 3600000) {
+    const h = Math.floor(left / 3600000);
+    const m = Math.floor((left % 3600000) / 60000);
+    return { text: `removes in ${h}h ${m}m`, css: "muted" };
+  }
+  if (left > 0) {
+    const m = Math.max(1, Math.ceil(left / 60000));
+    return { text: `removes in ${m}m`, css: "muted" };
+  }
+  if (gateOpen) {
+    return { text: "ready", css: "ready" };
+  }
+  return {
+    text: "waiting for gate ↓",
+    css: "gate-wait",
+    title: "solve a leetcode problem to unlock removals"
+  };
+}
+
+async function runPendingRemovalPassOnOpen(blacklist) {
+  const localRaw = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals, LOCAL_KEYS.problemGate]);
+  let pending = Array.isArray(localRaw.pendingRemovals) ? [...localRaw.pendingRemovals] : [];
+  const pruned = prunePendingOrphans(blacklist, pending);
+  if (pruned.length !== pending.length) {
+    pending = pruned;
+    await chrome.storage.local.set({ pendingRemovals: pending });
+  }
+  const gateOpen = isGateOpen(localRaw.problemGate);
+  const now = Date.now();
+  const targets = pending.filter(
+    (pr) =>
+      now >= pr.executeAfter &&
+      gateOpen &&
+      blacklist.some((b) => canonicalizeDomainKey(b) === canonicalizeDomainKey(pr.domain))
+  );
+  for (const pr of targets) {
+    const res = await chrome.runtime.sendMessage({ type: "EXECUTE_REMOVAL", domain: pr.domain });
+    if (!res?.success) {
+      continue;
+    }
+  }
+}
+
+async function cancelPendingRemoval(domain) {
+  const localRaw = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals]);
+  const pending = Array.isArray(localRaw.pendingRemovals) ? localRaw.pendingRemovals : [];
+  const next = pending.filter((p) => canonicalizeDomainKey(p.domain) !== canonicalizeDomainKey(domain));
+  if (next.length !== pending.length) {
+    await chrome.storage.local.set({ pendingRemovals: next });
+  }
+}
+
+async function queueRemovalForSite(siteDomain) {
+  const localRaw = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals]);
+  const pending = Array.isArray(localRaw.pendingRemovals) ? [...localRaw.pendingRemovals] : [];
+  const key = canonicalizeDomainKey(siteDomain);
+  const withoutDup = pending.filter((p) => canonicalizeDomainKey(p.domain) !== key);
+  const now = Date.now();
+  withoutDup.push({
+    domain: siteDomain,
+    queuedAt: now,
+    executeAfter: now + REMOVAL_DELAY_MS
+  });
+  await chrome.storage.local.set({ pendingRemovals: withoutDup });
 }
 
 function normalizeShameLevelUi(raw) {
@@ -276,31 +373,104 @@ async function fetchState() {
   };
 }
 
-function renderSites(blacklist) {
+function renderProblemGateLine(problemGateRaw) {
+  if (!problemGateLineEl) {
+    return;
+  }
+  problemGateLineEl.innerHTML = "";
+  problemGateLineEl.className = "line problem-gate-line";
+  const gateOpen = isGateOpen(problemGateRaw);
+
+  const arr = document.createElement("span");
+  arr.className = "arrow";
+  arr.textContent = "→";
+  problemGateLineEl.append(arr, document.createTextNode(" gate\xa0\xa0"));
+
+  const badge = document.createElement("span");
+  badge.textContent = gateOpen ? "[OPEN]" : "[LOCKED]";
+  badge.className = gateOpen ? "gate-badge-open" : "gate-badge-locked";
+
+  problemGateLineEl.append(badge);
+  problemGateLineEl.append(document.createTextNode("\xa0 · "));
+
+  const rest = document.createElement("span");
+  rest.className = "problem-gate-sub";
+  if (gateOpen) {
+    const slug =
+      problemGateRaw && typeof problemGateRaw.solvedSlug === "string"
+        ? problemGateRaw.solvedSlug
+        : "";
+    rest.textContent = slug ? `unlocked via ${slug}` : "unlocked";
+  } else {
+    rest.textContent = "solve a problem to unlock removals";
+  }
+
+  problemGateLineEl.append(rest);
+}
+
+function renderSites(blacklist, pendingRaw, problemGateRaw) {
   sitesListEl.innerHTML = "";
+  const pendingArr = Array.isArray(pendingRaw) ? pendingRaw : [];
+  const pendingByKey = new Map();
+  for (const p of pendingArr) {
+    pendingByKey.set(canonicalizeDomainKey(p.domain), p);
+  }
+  const gateOpen = isGateOpen(problemGateRaw);
 
   blacklist.forEach((site) => {
+    const pend = pendingByKey.get(canonicalizeDomainKey(site));
+
     const row = document.createElement("div");
-    row.className = "site-row";
+    row.className = pend ? "site-row site-row--queued" : "site-row";
 
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "remove-btn";
-    removeBtn.type = "button";
-    removeBtn.textContent = "[×]";
-    removeBtn.title = `Remove ${site}`;
-    removeBtn.addEventListener("click", async () => {
-      const data = await chrome.storage.sync.get([SYNC_KEYS.blacklist]);
-      const existing = Array.isArray(data.blacklist) ? data.blacklist : [];
-      const next = existing.filter((item) => item !== site);
-      await chrome.storage.sync.set({ blacklist: next });
-      await renderMain();
-    });
+    if (pend) {
+      row.dataset.executeAfter = String(pend.executeAfter);
+      row.dataset.gateOpen = gateOpen ? "1" : "";
+    }
 
-    const siteName = document.createElement("span");
-    siteName.className = "site-name";
-    siteName.textContent = site;
+    if (pend) {
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "cancel-removal-btn";
+      cancelBtn.type = "button";
+      cancelBtn.textContent = "[↺]";
+      cancelBtn.title = "Cancel removal";
+      cancelBtn.addEventListener("click", async () => {
+        await cancelPendingRemoval(site);
+        await renderMain();
+      });
 
-    row.append(removeBtn, siteName);
+      const siteName = document.createElement("span");
+      siteName.className = "site-name";
+      siteName.textContent = site;
+
+      const meta = document.createElement("span");
+      meta.className = "site-removal-meta";
+      const sub = formatRemovalRowMeta(pend.executeAfter, gateOpen);
+      meta.textContent = sub.text;
+      meta.classList.add(sub.css);
+      if (sub.title) {
+        meta.title = sub.title;
+      }
+
+      row.append(cancelBtn, siteName, meta);
+    } else {
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "remove-btn";
+      removeBtn.type = "button";
+      removeBtn.textContent = "[×]";
+      removeBtn.title = `Queue removal (${site})`;
+      removeBtn.addEventListener("click", async () => {
+        await queueRemovalForSite(site);
+        await renderMain();
+      });
+
+      const siteName = document.createElement("span");
+      siteName.className = "site-name";
+      siteName.textContent = site;
+
+      row.append(removeBtn, siteName);
+    }
+
     sitesListEl.appendChild(row);
   });
 }
@@ -312,13 +482,18 @@ function renderToggle(enabled) {
 }
 
 async function renderMain() {
-  const state = await fetchState();
+  let state = await fetchState();
 
   applyRedirectModeUi(state.redirectMode, state.customRedirectUrl, state.rawCustomUrlStored);
 
   if (activeView === "queue" && state.redirectMode === REDIRECT_MODE_CUSTOM) {
     showView("main");
   }
+
+  await runPendingRemovalPassOnOpen(state.blacklist);
+
+  state = await fetchState();
+  const gateLocalFresh = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals, LOCAL_KEYS.problemGate]);
 
   blockedCountEl.textContent = String(state.blacklist.length);
   redirectsTodayEl.textContent = String(state.redirectsToday);
@@ -333,7 +508,8 @@ async function renderMain() {
     renderDifficulty(state.lastDifficulty);
   }
 
-  renderSites(state.blacklist);
+  renderSites(state.blacklist, gateLocalFresh.pendingRemovals, gateLocalFresh.problemGate);
+  renderProblemGateLine(gateLocalFresh.problemGate);
   renderToggle(state.enabled);
   renderShameLevelTokens(state.shameLevel);
   syncAllFollowingCarets();
@@ -438,6 +614,14 @@ siteInputEl.addEventListener("keydown", async (event) => {
   const data = await chrome.storage.sync.get([SYNC_KEYS.blacklist]);
   const existing = Array.isArray(data.blacklist) ? data.blacklist : [];
 
+  const localPick = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals]);
+  const pendingPrev = Array.isArray(localPick.pendingRemovals) ? localPick.pendingRemovals : [];
+  const key = canonicalizeDomainKey(normalized);
+  const nextPending = pendingPrev.filter((p) => canonicalizeDomainKey(p.domain) !== key);
+  if (nextPending.length !== pendingPrev.length) {
+    await chrome.storage.local.set({ pendingRemovals: nextPending });
+  }
+
   if (!existing.includes(normalized)) {
     await chrome.storage.sync.set({ blacklist: [...existing, normalized] });
   }
@@ -538,7 +722,9 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
     changes.redirectsDate ||
     changes.redirectStreak ||
     changes.schedule ||
-    changes.behaviorLog;
+    changes.behaviorLog ||
+    changes.pendingRemovals ||
+    changes.problemGate;
 
   if (!relevant) {
     return;
@@ -744,5 +930,34 @@ if (shameHelpTipWrapEl && shameHelpTooltipEl && shameHelpTipBtnEl) {
   shameHelpTipBtnEl.addEventListener("blur", scheduleShameTooltipHide);
 }
 
+/** @type {ReturnType<typeof setInterval> | null} */
+let removalCountdownInterval = null;
+
+async function tickRemovalSitesUi() {
+  if (activeView !== "main") {
+    return;
+  }
+  const syncBefore = await chrome.storage.sync.get([SYNC_KEYS.blacklist]);
+  const blacklistBefore = Array.isArray(syncBefore.blacklist) ? syncBefore.blacklist : [];
+  await runPendingRemovalPassOnOpen(blacklistBefore);
+  const localData = await chrome.storage.local.get([LOCAL_KEYS.pendingRemovals, LOCAL_KEYS.problemGate]);
+  const syncAfter = await chrome.storage.sync.get([SYNC_KEYS.blacklist]);
+  const blacklist = Array.isArray(syncAfter.blacklist) ? syncAfter.blacklist : [];
+  renderSites(blacklist, localData.pendingRemovals, localData.problemGate);
+  renderProblemGateLine(localData.problemGate);
+
+  blockedCountEl.textContent = String(blacklist.length);
+}
+
+function ensureRemovalCountdownTick() {
+  if (removalCountdownInterval !== null) {
+    return;
+  }
+  removalCountdownInterval = window.setInterval(() => {
+    void tickRemovalSitesUi();
+  }, 60000);
+}
+
 renderMain();
 showView("main");
+ensureRemovalCountdownTick();

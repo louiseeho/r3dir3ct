@@ -38,8 +38,12 @@ const STORAGE_LOCAL_KEYS = {
   pendingChecks: "pendingChecks",
   dodgesToday: "dodgesToday",
   streakDays: "streakDays",
-  shameOverlay: "shameOverlay"
+  shameOverlay: "shameOverlay",
+  pendingRemovals: "pendingRemovals",
+  problemGate: "problemGate"
 };
+
+const DAILY_REMOVAL_ALARM = "r3dir3ct_daily_removal_utc";
 
 const tabRedirectGuard = new Map();
 
@@ -215,6 +219,78 @@ async function shameFromDnrRuleMatch(tabId, problemUrl) {
 
 function getTodayISO() {
   return new Date().toISOString().split("T")[0];
+}
+
+function getNextUtcMidnightMs() {
+  const now = Date.now();
+  const d = new Date(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1, 0, 0, 0, 0);
+}
+
+async function ensureDailyRemovalAlarm() {
+  const existing = await chrome.alarms.get(DAILY_REMOVAL_ALARM);
+  if (existing) {
+    return;
+  }
+  await chrome.alarms.create(DAILY_REMOVAL_ALARM, {
+    when: getNextUtcMidnightMs(),
+    periodInMinutes: 1440
+  });
+}
+
+/**
+ * Drops pending rows whose domain is not on the blacklist (canonical match).
+ * @param {string[]} blacklist
+ * @param {Array<{ domain: string, queuedAt: number, executeAfter: number }>} pending
+ */
+function filterOrphanPendingRemovals(blacklist, pending) {
+  return pending.filter((row) =>
+    blacklist.some((b) => canonicalizeDomain(b) === canonicalizeDomain(row.domain))
+  );
+}
+
+function problemGateOpenToday(rawGate) {
+  const today = getTodayISO();
+  return rawGate && typeof rawGate === "object" && rawGate.unlockedOn === today;
+}
+
+/**
+ * Removes ready pending domains (timer elapsed + gate open), updates sync/local, refreshes rules.
+ */
+async function executeReadyPendingRemovalsCore() {
+  const localRaw = await chrome.storage.local.get([
+    STORAGE_LOCAL_KEYS.pendingRemovals,
+    STORAGE_LOCAL_KEYS.problemGate
+  ]);
+  const gateOpen = problemGateOpenToday(localRaw[STORAGE_LOCAL_KEYS.problemGate]);
+  let pending = Array.isArray(localRaw.pendingRemovals) ? [...localRaw.pendingRemovals] : [];
+
+  const syncRaw = await chrome.storage.sync.get([STORAGE_SYNC_KEYS.blacklist]);
+  let blacklist = Array.isArray(syncRaw.blacklist) ? [...syncRaw.blacklist] : [];
+
+  pending = filterOrphanPendingRemovals(blacklist, pending);
+
+  const now = Date.now();
+  if (!gateOpen) {
+    await chrome.storage.local.set({ [STORAGE_LOCAL_KEYS.pendingRemovals]: pending });
+    return;
+  }
+
+  const domainsToRemove = new Set(
+    pending.filter((pr) => now >= pr.executeAfter).map((pr) => canonicalizeDomain(pr.domain))
+  );
+
+  if (domainsToRemove.size === 0) {
+    await chrome.storage.local.set({ [STORAGE_LOCAL_KEYS.pendingRemovals]: pending });
+    return;
+  }
+
+  blacklist = blacklist.filter((b) => !domainsToRemove.has(canonicalizeDomain(b)));
+  pending = pending.filter((pr) => !domainsToRemove.has(canonicalizeDomain(pr.domain)));
+
+  await chrome.storage.sync.set({ [STORAGE_SYNC_KEYS.blacklist]: blacklist });
+  await chrome.storage.local.set({ [STORAGE_LOCAL_KEYS.pendingRemovals]: pending });
+  await updateRules();
 }
 
 function extractSiteHostname(url) {
@@ -597,14 +673,51 @@ async function trackRedirectAttempt(tabId, url) {
   await updateRules();
 }
 
+async function executeRemovalOneDomain(domainRaw) {
+  const target = canonicalizeDomain(domainRaw);
+  if (!target) {
+    return;
+  }
+
+  const syncRaw = await chrome.storage.sync.get([STORAGE_SYNC_KEYS.blacklist]);
+  let blacklist = Array.isArray(syncRaw.blacklist) ? [...syncRaw.blacklist] : [];
+  blacklist = blacklist.filter((b) => canonicalizeDomain(b) !== target);
+
+  const localRaw = await chrome.storage.local.get([STORAGE_LOCAL_KEYS.pendingRemovals]);
+  let pending = Array.isArray(localRaw.pendingRemovals) ? [...localRaw.pendingRemovals] : [];
+  pending = pending.filter((pr) => canonicalizeDomain(pr.domain) !== target);
+
+  await chrome.storage.sync.set({ [STORAGE_SYNC_KEYS.blacklist]: blacklist });
+  await chrome.storage.local.set({ [STORAGE_LOCAL_KEYS.pendingRemovals]: pending });
+  await updateRules();
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeDefaults();
+  await ensureDailyRemovalAlarm();
   await updateRules();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await initializeDefaults();
+  await ensureDailyRemovalAlarm();
   await updateRules();
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type !== "EXECUTE_REMOVAL" || typeof msg.domain !== "string") {
+    return undefined;
+  }
+  (async () => {
+    try {
+      await executeRemovalOneDomain(msg.domain);
+      sendResponse({ success: true });
+    } catch (err) {
+      console.error("r3dir3ct: EXECUTE_REMOVAL failed", err);
+      sendResponse({ success: false });
+    }
+  })();
+  return true;
 });
 
 chrome.storage.onChanged.addListener(async (changes, areaName) => {
@@ -623,6 +736,10 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === DAILY_REMOVAL_ALARM) {
+    await executeReadyPendingRemovalsCore();
+    return;
+  }
   if (!alarm.name.startsWith("checkSolve__")) {
     return;
   }
@@ -658,6 +775,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
   await updateSolveStatus(payload.slug, payload.redirectedAt, outcome.solved);
   await updateRecord(payload.slug, outcome.quality);
+
+  if (outcome.solved) {
+    await chrome.storage.local.set({
+      [STORAGE_LOCAL_KEYS.problemGate]: {
+        unlockedOn: getTodayISO(),
+        solvedSlug: payload.slug
+      }
+    });
+    await executeReadyPendingRemovalsCore();
+  }
 });
 
 chrome.action.onClicked.addListener(async () => {
