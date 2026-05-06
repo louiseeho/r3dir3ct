@@ -130,9 +130,51 @@
           font-size: clamp(13px, 1.6vw, 16px);
           cursor: pointer;
           user-select: none;
+          position: relative;
+          overflow: hidden;
+          transition:
+            color 140ms ease,
+            transform 140ms ease,
+            text-shadow 140ms ease;
         }
         .count:hover {
-          color: #e6edf3;
+          color: #79c0ff;
+          transform: translateY(-1px);
+          text-shadow: 0 0 14px rgba(121, 192, 255, 0.35);
+        }
+        .count::after {
+          content: "";
+          position: absolute;
+          top: -180%;
+          left: -35%;
+          width: 40%;
+          height: 460%;
+          pointer-events: none;
+          transform: rotate(22deg) translateX(-140%);
+          background: linear-gradient(
+            180deg,
+            transparent 0%,
+            rgba(121, 192, 255, 0.06) 28%,
+            rgba(121, 192, 255, 0.22) 50%,
+            rgba(121, 192, 255, 0.06) 72%,
+            transparent 100%
+          );
+        }
+        .count:hover::after {
+          animation: link-sheen 680ms ease;
+        }
+        @keyframes link-sheen {
+          0% {
+            transform: rotate(22deg) translateX(-140%);
+            opacity: 0;
+          }
+          18% {
+            opacity: 1;
+          }
+          100% {
+            transform: rotate(22deg) translateX(320%);
+            opacity: 0;
+          }
         }
         .hint {
           color: #6e7681;

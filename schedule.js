@@ -107,9 +107,22 @@ export async function pickNextProblem(ruleChainExclude) {
   const now = Date.now();
   const randomExclude = ruleChainExclude !== undefined ? ruleChainExclude : lastSlug;
 
+  const solvedRaw = await chrome.storage.local.get(["lcSolvedSlugs"]);
+  const syncedSolved = new Set(
+    Array.isArray(solvedRaw.lcSolvedSlugs)
+      ? solvedRaw.lcSolvedSlugs.filter((s) => typeof s === "string" && s)
+      : []
+  );
+
   const allSlugs = problems.map((p) => p.slug);
+  const unsolvedSlugs = allSlugs.filter((slug) => {
+    const rec = records[slug];
+    const scheduleSolved = rec && typeof rec.solvedCount === "number" && rec.solvedCount > 0;
+    return !scheduleSolved && !syncedSolved.has(slug);
+  });
+  const candidateSlugs = unsolvedSlugs.length > 0 ? unsolvedSlugs : allSlugs;
   const due = [];
-  for (const slug of allSlugs) {
+  for (const slug of candidateSlugs) {
     const rec = records[slug];
     if (!rec || typeof rec.nextDue !== "number") continue;
     if (rec.nextDue <= now) {
@@ -129,9 +142,9 @@ export async function pickNextProblem(ruleChainExclude) {
   }
 
   const targetDiff = pickWeightedDifficulty(totalRedirects);
-  let candidates = filterByDifficulty(allSlugs, targetDiff);
+  let candidates = filterByDifficulty(candidateSlugs, targetDiff);
   if (candidates.length === 0) {
-    candidates = allSlugs;
+    candidates = candidateSlugs;
   }
   return pickRandomAvoiding(candidates, randomExclude || null);
 }

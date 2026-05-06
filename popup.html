@@ -43,7 +43,7 @@
         display: flex;
         justify-content: center;
         align-items: flex-start;
-        padding: 28px 20px 40px;
+        padding: 20px;
         position: relative;
         overflow-x: hidden;
         overflow-y: auto;
@@ -68,9 +68,9 @@
         z-index: 1;
         width: 100%;
         max-width: 720px;
-        height: min(620px, calc(100vh - 56px));
-        min-height: min(620px, calc(100vh - 56px));
-        max-height: calc(100vh - 56px);
+        height: calc(100vh - 40px);
+        min-height: 0;
+        max-height: calc(100vh - 40px);
         border: 1px solid var(--border);
         border-radius: 10px;
         background: linear-gradient(160deg, rgba(22, 27, 34, 0.96) 0%, rgba(13, 17, 23, 0.98) 62%);
@@ -201,6 +201,7 @@
       .content {
         padding: 20px 24px 24px;
         flex: 1;
+        min-height: 0;
         position: relative;
         overflow-y: auto;
         overflow-x: clip;
@@ -963,7 +964,6 @@
           <img class="app-logo" src="icon.svg" alt="" width="22" height="22" />
           <div>
             <div class="title">r3dir3ct</div>
-            <div class="subtitle">extension dashboard</div>
           </div>
         </div>
       </div>

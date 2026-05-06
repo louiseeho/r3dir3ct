@@ -1,6 +1,7 @@
 import { pickNextProblem, noteRedirectForSchedule, updateRecord, ensureScheduleBlobSeeded } from "./schedule.js";
 import { checkSolved } from "./graphql.js";
 import { logRedirect, updateSolveStatus } from "./behavior.js";
+import { syncSolvedSetFromLeetCode, markSolvedSlug } from "./leetcode-sync.js";
 import {
   parseRedirectSettingsFromSync,
   isAlreadyOnRedirectDestination,
@@ -23,6 +24,7 @@ const DEFAULT_BLACKLIST = [
 const STORAGE_SYNC_KEYS = {
   blacklist: "blacklist",
   enabled: "enabled",
+  lcUsername: "lcUsername",
   redirectMode: STORAGE_REDIRECT_MODE,
   customRedirectUrl: STORAGE_CUSTOM_REDIRECT_URL,
   shameLevel: "shameLevel"
@@ -44,6 +46,7 @@ const STORAGE_LOCAL_KEYS = {
 };
 
 const DAILY_REMOVAL_ALARM = "r3dir3ct_daily_removal_utc";
+const SOLVED_SYNC_ALARM = "r3dir3ct_sync_lc_solved";
 
 const tabRedirectGuard = new Map();
 
@@ -236,6 +239,26 @@ async function ensureDailyRemovalAlarm() {
     when: getNextUtcMidnightMs(),
     periodInMinutes: 1440
   });
+}
+
+async function ensureSolvedSyncAlarm() {
+  const existing = await chrome.alarms.get(SOLVED_SYNC_ALARM);
+  if (existing) {
+    return;
+  }
+  await chrome.alarms.create(SOLVED_SYNC_ALARM, {
+    delayInMinutes: 1,
+    periodInMinutes: 360
+  });
+}
+
+async function syncSolvedHistoryIfPossible() {
+  const syncData = await chrome.storage.sync.get([STORAGE_SYNC_KEYS.lcUsername]);
+  const username = typeof syncData.lcUsername === "string" ? syncData.lcUsername.trim() : "";
+  if (!username) {
+    return;
+  }
+  await syncSolvedSetFromLeetCode(username);
 }
 
 /**
@@ -695,12 +718,16 @@ async function executeRemovalOneDomain(domainRaw) {
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeDefaults();
   await ensureDailyRemovalAlarm();
+  await ensureSolvedSyncAlarm();
+  await syncSolvedHistoryIfPossible();
   await updateRules();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await initializeDefaults();
   await ensureDailyRemovalAlarm();
+  await ensureSolvedSyncAlarm();
+  await syncSolvedHistoryIfPossible();
   await updateRules();
 });
 
@@ -733,11 +760,18 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
   ) {
     await updateRules();
   }
+  if (changes.lcUsername) {
+    await syncSolvedHistoryIfPossible();
+  }
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === DAILY_REMOVAL_ALARM) {
     await executeReadyPendingRemovalsCore();
+    return;
+  }
+  if (alarm.name === SOLVED_SYNC_ALARM) {
+    await syncSolvedHistoryIfPossible();
     return;
   }
   if (!alarm.name.startsWith("checkSolve__")) {
@@ -777,6 +811,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   await updateRecord(payload.slug, outcome.quality);
 
   if (outcome.solved) {
+    await markSolvedSlug(payload.slug);
     await chrome.storage.local.set({
       [STORAGE_LOCAL_KEYS.problemGate]: {
         unlockedOn: getTodayISO(),
